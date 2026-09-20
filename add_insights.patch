@@ -1,0 +1,56 @@
+--- server.ts
++++ server.ts
+@@ -3339,2 +3339,46 @@
+ 
++  // Get AI Insights
++  app.get("/api/dashboard/insights", async (req, res) => {
++    try {
++      const { startDate, endDate } = req.query;
++      
++      let dateFilter = "date(s.created_at) >= date('now', '-7 days')";
++      if (startDate && endDate) {
++        dateFilter = `date(s.created_at) >= '${startDate}' AND date(s.created_at) <= '${endDate}'`;
++      }
++      
++      const sales = db.prepare(`
++        SELECT date(created_at) as date, SUM(total) as total 
++        FROM sales 
++        WHERE date(created_at) >= date('now', '-7 days')
++        GROUP BY date(created_at)
++        ORDER BY date(created_at) ASC
++      `).all();
++      
++      const topProducts = db.prepare(`
++        SELECT p.name, SUM(si.quantity) as qty
++        FROM sale_items si
++        JOIN products p ON si.product_id = p.id
++        JOIN sales s ON si.sale_id = s.id
++        WHERE ${dateFilter}
++        GROUP BY p.id
++        ORDER BY qty DESC
++        LIMIT 3
++      `).all();
++
++      const prompt = \`Actúa como un analista financiero experto en retail. Analiza los siguientes datos de ventas de los últimos días y los productos más vendidos. Dame 3 sugerencias breves, concretas y de alto impacto (máximo 2 oraciones cada una) para mejorar las ganancias, gestionar el inventario, o crear promociones. Datos de ventas diarias: \${JSON.stringify(sales)}. Productos top: \${JSON.stringify(topProducts)}. Responde EXCLUSIVAMENTE en un array JSON con el formato [{"title": "título corto", "description": "tu sugerencia"}]. No uses bloques de código markdown, solo el texto JSON crudo.\`;
++
++      const ai = getAI();
++      const response = await ai.models.generateContent({
++        model: 'gemini-2.5-flash',
++        contents: prompt
++      });
++      
++      const insightsText = response.text || '[]';
++      let insights = [];
++      try {
++        insights = JSON.parse(insightsText.replace(/```json/g, '').replace(/```/g, '').trim());
++      } catch (err) {
++        console.error("Error parsing Gemini JSON:", insightsText);
++      }
++      res.json(insights);
++    } catch (e: any) {
++      console.error("Error in insights endpoint:", e);
++      res.status(500).json({ error: e.message });
++    }
++  });
++
+   // Get general dashboard stats

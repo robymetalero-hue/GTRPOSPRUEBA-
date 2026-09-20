@@ -1,0 +1,33 @@
+--- src/App.tsx
++++ src/App.tsx
+@@ -19,2 +19,3 @@
+ import { jsPDF } from 'jspdf';
++import { startAutoBackupScheduler } from './utils/driveBackupScheduler';
+ 
+@@ -229,2 +230,12 @@
+     const [showDevicesModal, setShowDevicesModal] = useState(false);
++    const [globalNotification, setGlobalNotification] = useState<{message: string; type: 'success'|'error'|'warn'} | null>(null);
++
++    useEffect(() => {
++        if (user) {
++            startAutoBackupScheduler("23:55", (msg, type) => {
++                setGlobalNotification({ message: msg, type });
++                setTimeout(() => setGlobalNotification(null), 7000);
++            });
++        }
++    }, [user]);
+ 
+@@ -1039,2 +1050,13 @@
+ 
++            {globalNotification && (
++                <div className={`fixed bottom-6 right-6 p-4 rounded-xl shadow-2xl z-50 flex items-center gap-3 text-white max-w-sm animate-in slide-in-from-bottom-5 ${
++                    globalNotification.type === 'success' ? 'bg-emerald-600' : 
++                    globalNotification.type === 'warn' ? 'bg-amber-500' : 'bg-rose-600'
++                }`}>
++                    <div className="flex-1 font-bold text-sm">
++                        {globalNotification.message}
++                    </div>
++                </div>
++            )}
++
+             {/* PWA Install Prompt - Modern Premium Floating Card */}

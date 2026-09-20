@@ -1,0 +1,61 @@
+--- src/views/Dashboard.tsx
++++ src/views/Dashboard.tsx
+@@ -3,2 +3,3 @@
+ import { TrendingUp, AlertTriangle, RefreshCw, BarChart2, ShieldAlert, DollarSign, Wallet, ArrowDownRight, Sparkles } from 'lucide-react';
++import { BrainCircuit, Loader2 } from 'lucide-react';
+ import { 
+@@ -33,2 +34,4 @@
+     const [loading, setLoading] = useState(true);
++    const [insights, setInsights] = useState<any[]>([]);
++    const [loadingInsights, setLoadingInsights] = useState(false);
+     const [notification, setNotification] = useState<{ message: string; type: 'success' | 'warn' | 'error' } | null>(null);
+@@ -58,2 +61,20 @@
+ 
++    const loadInsights = async () => {
++        setLoadingInsights(true);
++        try {
++            const res = await fetch(`/api/dashboard/insights?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}`);
++            if (res.ok) {
++                const data = await res.json();
++                setInsights(Array.isArray(data) ? data : []);
++            }
++        } catch (e) {
++            console.error("Failure loading AI insights:", e);
++        } finally {
++            setLoadingInsights(false);
++        }
++    };
++
+     useEffect(() => {
+         loadStats();
++        loadInsights();
+     }, [dateRange]);
+@@ -406,2 +427,27 @@
+ 
++            {/* AI Insights Widget */}
++            <div className="bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-200/50 dark:border-indigo-500/20 rounded-3xl p-5 shadow-sm relative overflow-hidden">
++                <div className="absolute -right-4 -top-4 text-indigo-500/10 dark:text-indigo-500/5">
++                    <BrainCircuit size={100} />
++                </div>
++                <div className="flex items-center justify-between mb-4 relative z-10">
++                    <div className="flex items-center gap-2">
++                        <BrainCircuit className="text-indigo-600 dark:text-indigo-400" size={20} />
++                        <h2 className="text-sm font-extrabold text-indigo-900 dark:text-indigo-100 uppercase tracking-wider">GTR POS AI Manager</h2>
++                    </div>
++                    {loadingInsights && <Loader2 size={16} className="text-indigo-500 animate-spin" />}
++                </div>
++                
++                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 relative z-10">
++                    {insights.map((insight, idx) => (
++                        <div key={idx} className="bg-white/60 dark:bg-slate-900/40 backdrop-blur-sm p-4 rounded-2xl border border-white/40 dark:border-slate-800/50">
++                            <h3 className="font-bold text-xs text-indigo-800 dark:text-indigo-300 uppercase mb-1.5">{insight.title}</h3>
++                            <p className="text-xs text-slate-700 dark:text-slate-400 leading-relaxed font-medium">{insight.description}</p>
++                        </div>
++                    ))}
++                    {!loadingInsights && insights.length === 0 && (
++                        <div className="col-span-1 md:col-span-3 text-center py-4 text-xs font-bold text-indigo-400 uppercase">Sin sugerencias disponibles.</div>
++                    )}
++                </div>
++            </div>
++
+             {/* Analíticas Clínicas y Gráficos Visuales de Última Generación */}

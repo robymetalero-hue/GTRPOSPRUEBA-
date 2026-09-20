@@ -1,0 +1,280 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@variant dark (&:where(.dark, .dark *));
+
+:root, .theme-emerald {
+  --brand-50: #ecfdf5;
+  --brand-100: #d1fae5;
+  --brand-150: #a7f3d0;
+  --brand-200: #a7f3d0;
+  --brand-300: #6ee7b7;
+  --brand-400: #34d399;
+  --brand-500: #10b981;
+  --brand-550: #059669;
+  --brand-600: #059669;
+  --brand-650: #047857;
+  --brand-700: #047857;
+  --brand-750: #065f46;
+  --brand-800: #065f46;
+  --brand-850: #064e3b;
+  --brand-900: #064e3b;
+  --brand-950: #022c22;
+}
+
+.theme-blue {
+  --brand-50: #eff6ff;
+  --brand-100: #dbeafe;
+  --brand-150: #bfdbfe;
+  --brand-200: #bfdbfe;
+  --brand-300: #93c5fd;
+  --brand-400: #60a5fa;
+  --brand-500: #3b82f6;
+  --brand-550: #2563eb;
+  --brand-600: #2563eb;
+  --brand-650: #1d4ed8;
+  --brand-700: #1d4ed8;
+  --brand-750: #1e40af;
+  --brand-800: #1e40af;
+  --brand-850: #172554;
+  --brand-900: #172554;
+  --brand-950: #0f172a;
+}
+
+.theme-charcoal {
+  --brand-50: #f8fafc;
+  --brand-100: #f1f5f9;
+  --brand-150: #e2e8f0;
+  --brand-200: #e2e8f0;
+  --brand-300: #cbd5e1;
+  --brand-400: #94a3b8;
+  --brand-500: #64748b;
+  --brand-550: #475569;
+  --brand-600: #475569;
+  --brand-650: #334155;
+  --brand-700: #334155;
+  --brand-750: #1e293b;
+  --brand-800: #1e293b;
+  --brand-850: #0f172a;
+  --brand-900: #0f172a;
+  --brand-950: #020617;
+}
+
+.theme-red {
+  --brand-50: #fef2f2;
+  --brand-100: #fee2e2;
+  --brand-150: #fecaca;
+  --brand-200: #fecaca;
+  --brand-300: #fca5a5;
+  --brand-400: #f87171;
+  --brand-500: #ef4444;
+  --brand-550: #dc2626;
+  --brand-600: #dc2626;
+  --brand-650: #b91c1c;
+  --brand-700: #b91c1c;
+  --brand-750: #991b1b;
+  --brand-800: #991b1b;
+  --brand-850: #7f1d1d;
+  --brand-900: #7f1d1d;
+  --brand-950: #450a0a;
+}
+
+.theme-purple {
+  --brand-50: #f5f3ff;
+  --brand-100: #ede9fe;
+  --brand-150: #ddd6fe;
+  --brand-200: #ddd6fe;
+  --brand-300: #c4b5fd;
+  --brand-400: #a78bfa;
+  --brand-500: #8b5cf6;
+  --brand-550: #7c3aed;
+  --brand-600: #4f46e5;
+  --brand-650: #4338ca;
+  --brand-700: #4338ca;
+  --brand-750: #3730a3;
+  --brand-800: #3730a3;
+  --brand-850: #312e81;
+  --brand-900: #1e1b4b;
+  --brand-950: #110b29;
+}
+
+.theme-orange {
+  --brand-50: #fff7ed;
+  --brand-100: #ffedd5;
+  --brand-150: #fed7aa;
+  --brand-200: #fed7aa;
+  --brand-300: #fdba74;
+  --brand-400: #fb923c;
+  --brand-500: #f97316;
+  --brand-550: #ea580c;
+  --brand-600: #ea580c;
+  --brand-650: #c2410c;
+  --brand-700: #c2410c;
+  --brand-750: #9a3412;
+  --brand-800: #9a3412;
+  --brand-850: #7c2d12;
+  --brand-900: #7c2d12;
+  --brand-950: #431407;
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-indigo-50: var(--brand-50);
+  --color-indigo-100: var(--brand-100);
+  --color-indigo-150: var(--brand-150);
+  --color-indigo-200: var(--brand-200);
+  --color-indigo-300: var(--brand-300);
+  --color-indigo-400: var(--brand-400);
+  --color-indigo-500: var(--brand-500);
+  --color-indigo-550: var(--brand-550);
+  --color-[#5c3bf5]: var(--brand-550);
+  --color-indigo-600: var(--brand-600);
+  --color-indigo-650: var(--brand-650);
+  --color-indigo-700: var(--brand-700);
+  --color-indigo-750: var(--brand-750);
+  --color-indigo-800: var(--brand-800);
+  --color-indigo-850: var(--brand-850);
+  --color-indigo-900: var(--brand-900);
+  --color-indigo-950: var(--brand-950);
+
+  --animate-rgb-shift: rgb-shift var(--rgb-speed, 20s) var(--rgb-ease, ease-in-out) var(--rgb-direction, infinite);
+
+  @keyframes rgb-shift {
+    0% {
+      background-position: 0% 50%;
+      filter: hue-rotate(0deg);
+    }
+    50% {
+      background-position: 100% 50%;
+      filter: hue-rotate(180deg);
+    }
+    100% {
+      background-position: 0% 50%;
+      filter: hue-rotate(360deg);
+    }
+  }
+}
+
+@layer base {
+  html, body {
+    @apply bg-[#f8fafc] text-slate-800 transition-colors duration-200 h-full w-full;
+  }
+  html.dark, html.dark body {
+    @apply bg-[#070a10] text-slate-100;
+  }
+  body {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Elegant scrollbar styling */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.2);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.4);
+}
+
+/* Touch scrolling optimizations and hardware acceleration for mobile devices */
+.touch-momentum {
+  -webkit-overflow-scrolling: touch !important;
+  scroll-behavior: smooth;
+  overscroll-behavior-y: auto;
+}
+
+.gamer-rgb-glow {
+  background: var(--rgb-gradient, linear-gradient(-45deg, #ff00ff, #00f0ff, #39ff14, #0066ff, #9900ff, #ff7700, #ff00ff));
+  background-size: 400% 400%;
+  animation: rgb-shift var(--rgb-speed, 20s) var(--rgb-ease, ease-in-out) var(--rgb-direction, infinite);
+  box-shadow: 0 0 var(--rgb-glow-radius, 15px) var(--rgb-glow-color, rgba(0, 255, 204, 0.35));
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.gamer-rgb-glow:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 0 var(--rgb-glow-hover-radius, 25px) var(--rgb-glow-hover-color, rgba(0, 255, 204, 0.65)), 0 0 10px rgba(255, 0, 85, 0.65);
+}
+
+/* Theme RGB Gamer / Neon System */
+.theme-rgb {
+  --brand-50: #faf5ff;
+  --brand-100: #f3e8ff;
+  --brand-150: #e9d5ff;
+  --brand-200: #e9d5ff;
+  --brand-300: #d8b4fe;
+  --brand-400: #c084fc;
+  --brand-500: #a855f7;
+  --brand-550: #9333ea;
+  --brand-600: #9333ea;
+  --brand-650: #7e22ce;
+  --brand-700: #7e22ce;
+  --brand-750: #6b21a8;
+  --brand-800: #6b21a8;
+  --brand-850: #581c87;
+  --brand-900: #3b0764;
+  --brand-950: #0f051d;
+}
+
+/* Elevate colored buttons to gorgeous custom RGB shifting style when the RGB theme is active */
+.theme-rgb button[class*="bg-indigo-"],
+.theme-rgb button[class*="bg-emerald-"],
+.theme-rgb button[class*="bg-blue-"],
+.theme-rgb button[class*="bg-violet-"],
+.theme-rgb button[class*="bg-purple-"],
+.theme-rgb button[class*="bg-rose-"],
+.theme-rgb button[class*="bg-orange-"],
+.theme-rgb button[class*="bg-amber-"],
+.theme-rgb button[class*="bg-[#"],
+.theme-rgb button.gamer-rgb-glow,
+.theme-rgb .gamer-rgb-glow,
+.gamer-rgb-glow {
+  background: var(--rgb-gradient, linear-gradient(-45deg, #ff00ff, #00f0ff, #39ff14, #0066ff, #9900ff, #ff7700, #ff00ff)) !important;
+  background-size: 400% 400% !important;
+  animation: rgb-shift var(--rgb-speed, 20s) var(--rgb-ease, ease-in-out) var(--rgb-direction, infinite) !important;
+  box-shadow: 0 0 var(--rgb-glow-radius, 12px) var(--rgb-glow-color, rgba(168, 85, 247, 0.35)) !important;
+  color: #ffffff !important;
+  border: none !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+.theme-rgb button[class*="bg-indigo-"]:hover,
+.theme-rgb button[class*="bg-emerald-"]:hover,
+.theme-rgb button[class*="bg-blue-"]:hover,
+.theme-rgb button[class*="bg-violet-"]:hover,
+.theme-rgb button[class*="bg-purple-"]:hover,
+.theme-rgb button[class*="bg-rose-"]:hover,
+.theme-rgb button[class*="bg-orange-"]:hover,
+.theme-rgb button[class*="bg-amber-"]:hover,
+.theme-rgb button[class*="bg-[#"]:hover,
+.theme-rgb button.gamer-rgb-glow:hover,
+.theme-rgb .gamer-rgb-glow:hover,
+.gamer-rgb-glow:hover {
+  transform: translateY(-1.5px) scale(1.02) !important;
+  box-shadow: 0 0 var(--rgb-glow-hover-radius, 20px) var(--rgb-glow-hover-color, rgba(168, 85, 247, 0.65)), 0 0 10px rgba(0, 240, 255, 0.5) !important;
+}
+
+/* Subtle outline hover style for secondary or gray buttons in RGB mode */
+.theme-rgb button:not(.gamer-rgb-glow):not([class*="bg-indigo-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-violet-"]):not([class*="bg-purple-"]):not([class*="bg-rose-"]):not([class*="bg-orange-"]):not([class*="bg-amber-"]):not([class*="bg-[#"]) {
+  transition: all 0.2s ease !important;
+}
+
+.theme-rgb button:not(.gamer-rgb-glow):not([class*="bg-indigo-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-violet-"]):not([class*="bg-purple-"]):not([class*="bg-rose-"]):not([class*="bg-orange-"]):not([class*="bg-amber-"]):not([class*="bg-[#"]):hover {
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25) !important;
+  border-color: rgba(168, 85, 247, 0.45) !important;
+  transform: translateY(-1px) !important;
+}
+
+
+

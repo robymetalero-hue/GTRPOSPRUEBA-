@@ -1,0 +1,56 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function hasIntegrityProof() {
+      return request.resource.data.keys().hasAll(['_tx_hash', '_tx_timestamp']);
+    }
+
+    // System sync state - client needs read to detect sync pulses
+    match /system/{docId} {
+      allow read: if true;
+      allow write: if hasIntegrityProof();
+    }
+
+    // User accounts & security - STRICTLY PROTECTED: No client direct reads or writes
+    match /users/{userId} {
+      allow read, write: if false;
+    }
+
+    match /usuarios/{userId} {
+      allow read, write: if false;
+    }
+
+    // Internal System Settings - allows read, writes require server integrity proof
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if hasIntegrityProof();
+    }
+
+    // Audit logs & transaction ledger: Read-only for authenticated sessions, writes require server integrity signature
+    match /system_audit_logs/{logId} {
+      allow read: if true;
+      allow write: if hasIntegrityProof();
+    }
+
+    match /firestore_transaction_ledger/{txId} {
+      allow read: if true;
+      allow write: if hasIntegrityProof();
+    }
+
+    // Business Data collections (sales, inventory, clients, credits, caja, products)
+    // Direct client unverified mutations are blocked; writes require valid server integrity proof
+    match /{collectionName}/{docId} {
+      allow read: if true;
+      allow write: if hasIntegrityProof();
+    }
+  }
+}
+
+

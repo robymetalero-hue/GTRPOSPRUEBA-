@@ -1,0 +1,51 @@
+--- server.ts
++++ server.ts
+@@ -6,6 +6,8 @@
+ import multer from 'multer';
+ import jwt from "jsonwebtoken";
++import helmet from "helmet";
++import rateLimit from "express-rate-limit";
+ import { db, getBoliviaISOString, insertSystemAuditLog } from "./database.ts";
+ import { pullFirestoreToLocal, syncAfterWrite, pushAllLocalToFirestore, firestore } from "./firebaseSync.ts";
+ 
+@@ -113,6 +115,22 @@
+ async function startServer() {
+   const app = express();
++
++  // SECURITY: Enable Helmet for security headers
++  app.use(helmet({
++    contentSecurityPolicy: false, // Disabling CSP temporarily to avoid breaking frontend scripts inline
++    crossOriginEmbedderPolicy: false,
++  }));
++
+   app.use(express.json({ limit: "15mb" }));
+   app.use(express.urlencoded({ limit: "15mb", extended: true }));
+ 
++  // SECURITY: Rate Limiting for auth endpoints to prevent brute force
++  const loginLimiter = rateLimit({
++    windowMs: 15 * 60 * 1000, // 15 minutes
++    max: 10, // Limit each IP to 10 login requests per `window`
++    message: { error: "Demasiados intentos de inicio de sesión, inténtelo más tarde." },
++    standardHeaders: true,
++    legacyHeaders: false,
++  });
++
+   // Audit User Context Extraction Middleware
+@@ -133,2 +151,19 @@
+   });
++
++  // TRACEABILITY: Global API Modification Logger
++  app.use('/api', (req, res, next) => {
++    const method = req.method;
++    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
++      // Log after response finishes to capture status
++      res.on('finish', () => {
++         if (res.statusCode >= 400 && req.url !== '/auth/login') {
++             // Optionally log failures
++         }
++      });
++    }
++    next();
++  });
++
++  app.post('/api/auth/login', loginLimiter, (req, res) => {

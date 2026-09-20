@@ -1,0 +1,20 @@
+--- src/views/Dashboard.tsx
++++ src/views/Dashboard.tsx
+@@ -9,2 +9,3 @@
+ import DateRangePicker, { DateRange } from '../components/DateRangePicker';
++import { backupDatabaseToDrive } from '../utils/driveBackup';
+ 
+@@ -176,2 +177,13 @@
+                 fetchProducts();
++
++                try {
++                    showNotification("Iniciando respaldo en Google Drive...", "success");
++                    const backupSuccess = await backupDatabaseToDrive();
++                    if (backupSuccess) {
++                        showNotification("✓ Respaldo subido exitosamente a Google Drive.", "success");
++                    }
++                } catch (err: any) {
++                    console.error("Backup to Drive failed:", err);
++                    showNotification("El respaldo en Google Drive falló: " + err.message, "error");
++                }
+             } else {

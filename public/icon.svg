@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Dark Mode Space Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="40%" stop-color="#090d16" />
+      <stop offset="100%" stop-color="#020617" />
+    </linearGradient>
+
+    <!-- Glowing Cyan/Teal Gradient for Digital accents -->
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22d3ee" />
+      <stop offset="100%" stop-color="#0891b2" />
+    </linearGradient>
+
+    <!-- Vibrant Royal Blue Gradient for the main POS/Terminal body -->
+    <linearGradient id="blueGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+
+    <!-- Warm Amber/Gold Gradient for sparkles and stars -->
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+
+    <!-- Elegant Text Gradient -->
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#cbd5e1" />
+    </linearGradient>
+
+    <!-- Advanced Shadow Filters for dynamic glow effect -->
+    <filter id="neonGlowCyan" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+    <filter id="neonGlowBlue" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background with Android Rounded Corner Standard (22.5%) -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+
+  <!-- Technical grid circles for a precise "Digital" feel -->
+  <circle cx="256" cy="220" r="190" fill="none" stroke="#334155" stroke-width="1.5" stroke-opacity="0.15" />
+  <circle cx="256" cy="220" r="150" fill="none" stroke="#334155" stroke-width="1" stroke-opacity="0.2" stroke-dasharray="8,6" />
+  <circle cx="256" cy="220" r="110" fill="none" stroke="#334155" stroke-width="1" stroke-opacity="0.15" />
+
+  <!-- Diagonal Tech Rays -->
+  <g stroke="#334155" stroke-opacity="0.1" stroke-width="1">
+    <line x1="66" y1="30" x2="446" y2="410" />
+    <line x1="446" y1="30" x2="66" y2="410" />
+  </g>
+
+  <!-- THE POS TERMINAL / STOREFRONT VECTOR GRAPHIC -->
+  <g transform="translate(0, -10)">
+    <!-- Stylized Mobile Tablet POS Terminal Frame -->
+    <rect x="156" y="100" width="200" height="230" rx="24" fill="#0f172a" stroke="url(#blueGrad)" stroke-width="10" filter="url(#neonGlowBlue)" />
+    
+    <!-- Screen Area -->
+    <rect x="172" y="116" width="168" height="150" rx="12" fill="#020617" stroke="#334155" stroke-width="2" />
+    
+    <!-- Smart Storefront Awning inside Screen (Digital Retail Symbol) -->
+    <!-- Awning Background -->
+    <path d="M 182,150 L 330,150 L 322,126 L 190,126 Z" fill="url(#blueGrad)" opacity="0.8" />
+    <!-- Awning stripes -->
+    <path d="M 190,126 L 202,150 M 214,126 L 222,150 M 238,126 L 242,150 M 262,126 L 262,150 M 286,126 L 282,150 M 306,126 L 298,150 M 322,126 L 314,150" stroke="#020617" stroke-width="3" />
+    
+    <!-- Holographic Shopping Cart / Basket icon on screen -->
+    <path d="M 216,180 L 224,180 L 236,215 L 286,215 L 296,188 L 232,188" fill="none" stroke="url(#cyanGrad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" filter="url(#neonGlowCyan)" />
+    <circle cx="242" cy="228" r="5" fill="#22d3ee" />
+    <circle cx="280" cy="228" r="5" fill="#22d3ee" />
+    
+    <!-- Glowing digital lightning/spark for "Instant checkout/Digital speed" -->
+    <path d="M 275,158 L 260,178 L 274,178 L 258,202" fill="none" stroke="url(#goldGrad)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- Credit Card Reader slot glowing indicator at the top -->
+    <rect x="216" y="86" width="80" height="8" rx="4" fill="#1e293b" />
+    <rect x="236" y="88" width="40" height="4" rx="2" fill="#22d3ee" opacity="0.8" />
+
+    <!-- Barcode lines representing Checkout at the bottom of the screen -->
+    <g fill="#475569" opacity="0.6">
+      <rect x="192" y="248" width="4" height="10" />
+      <rect x="200" y="248" width="10" height="10" />
+      <rect x="214" y="248" width="2" height="10" />
+      <rect x="220" y="248" width="6" height="10" />
+      <rect x="230" y="248" width="8" height="10" />
+      <rect x="242" y="248" width="4" height="10" />
+      <rect x="250" y="248" width="12" height="10" />
+      <rect x="266" y="248" width="2" height="10" />
+      <rect x="272" y="248" width="6" height="10" />
+      <rect x="282" y="248" width="10" height="10" />
+      <rect x="296" y="248" width="4" height="10" />
+      <rect x="304" y="248" width="2" height="10" />
+      <rect x="310" y="248" width="8" height="10" />
+      <rect x="320" y="248" width="4" height="10" />
+    </g>
+
+    <!-- POS Receipt paper coming out of the bottom of terminal -->
+    <path d="M 196,282 L 316,282 L 316,310 L 306,302 L 296,310 L 286,302 L 276,310 L 266,302 L 256,310 L 246,302 L 236,310 L 226,302 L 216,310 L 206,302 L 196,310 Z" fill="#f8fafc" stroke="#e2e8f0" stroke-width="2" />
+    
+    <!-- Receipt printed content simulation lines -->
+    <line x1="210" y1="290" x2="302" y2="290" stroke="#94a3b8" stroke-width="2.5" stroke-dasharray="8,5" />
+    <line x1="210" y1="297" x2="280" y2="297" stroke="#94a3b8" stroke-width="2" stroke-dasharray="14,6" />
+
+    <!-- Front Sparkles/Magic (indicating AI / Premium service) -->
+    <path d="M 125,120 L 129,132 L 141,136 L 129,140 L 125,152 L 121,140 L 109,136 L 121,132 Z" fill="#fbbf24" opacity="0.8" />
+    <path d="M 385,240 L 388,249 L 397,252 L 388,255 L 385,264 L 382,255 L 373,252 L 382,249 Z" fill="#22d3ee" opacity="0.8" />
+  </g>
+
+  <!-- BRAND NAME "DIGITAL STORE" -->
+  <g transform="translate(0, 10)">
+    <!-- Subtitle 'DIGITAL' -->
+    <text x="256" y="398" 
+          font-family="system-ui, -apple-system, 'Inter', sans-serif" 
+          font-weight="900" 
+          font-size="36" 
+          letter-spacing="9" 
+          fill="url(#cyanGrad)" 
+          text-anchor="middle">DIGITAL</text>
+
+    <!-- Main Title 'STORE' -->
+    <text x="256" y="446" 
+          font-family="system-ui, -apple-system, 'Inter', sans-serif" 
+          font-weight="950" 
+          font-size="44" 
+          letter-spacing="5" 
+          fill="url(#textGrad)" 
+          text-anchor="middle">STORE</text>
+
+    <!-- Thin elegant accent underline with a glowing node -->
+    <line x1="170" y1="468" x2="342" y2="468" stroke="#334155" stroke-width="2.5" stroke-linecap="round" />
+    <line x1="220" y1="468" x2="292" y2="468" stroke="url(#cyanGrad)" stroke-width="3" stroke-linecap="round" />
+    <circle cx="256" cy="468" r="4.5" fill="#22d3ee" filter="url(#neonGlowCyan)" />
+  </g>
+</svg>

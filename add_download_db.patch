@@ -1,0 +1,18 @@
+--- server.ts
++++ server.ts
+@@ -2117,2 +2117,14 @@
+ 
++  app.get("/api/backup/download-db", (req, res) => {
++    try {
++      const dbPath = path.resolve(process.cwd(), 'gtr_pos.db');
++      if (fs.existsSync(dbPath)) {
++        res.download(dbPath, 'gtr_pos.db');
++      } else {
++        res.status(404).json({ error: "Database file not found" });
++      }
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
+   app.get("/api/backup", (req, res) => {

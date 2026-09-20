@@ -1,0 +1,31 @@
+--- server.ts
++++ server.ts
+@@ -3606,2 +3606,21 @@
+ 
++      let hourlySales;
++      if (startDate && endDate) {
++        hourlySales = db.prepare(`
++          SELECT strftime('%H', created_at) as hour, SUM(total) as total
++          FROM sales
++          WHERE date(created_at) >= date(?) AND date(created_at) <= date(?)
++          GROUP BY hour
++          ORDER BY hour ASC
++        `).all(startDate, endDate);
++      } else {
++        hourlySales = db.prepare(`
++          SELECT strftime('%H', created_at) as hour, SUM(total) as total
++          FROM sales
++          GROUP BY hour
++          ORDER BY hour ASC
++        `).all();
++      }
++
+       res.json({
+@@ -3612,3 +3631,4 @@
+         topProducts,
+-        salesTrend,
+-        paymentDistribution
++        salesTrend,
++        paymentDistribution,
++        hourlySales
+       });

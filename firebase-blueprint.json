@@ -1,0 +1,282 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account representing administrators and managers.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string" },
+        "permissions": { "type": "string" }
+      },
+      "required": ["username", "password", "role"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Inventory product containing price, cost, stock, and photography.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "sku": { "type": "string" },
+        "stock": { "type": "integer" },
+        "price_unit": { "type": "number" },
+        "price_bulk": { "type": "number" },
+        "price_cost": { "type": "number" },
+        "stock_alarm": { "type": "integer" },
+        "image": { "type": "string" }
+      },
+      "required": ["name", "sku", "stock", "price_unit", "price_cost"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Client registry for custom orders and accounts.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "Completed transaction containing items sold, total, discount, and rate.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "total": { "type": "number" },
+        "discount": { "type": "number" },
+        "payment_method": { "type": "string" },
+        "user_id": { "type": "integer" },
+        "client_id": { "type": "integer" },
+        "exchange_rate": { "type": "number" },
+        "cierre_id": { "type": "integer" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["total", "payment_method", "user_id"]
+    },
+    "SaleItem": {
+      "title": "SaleItem",
+      "description": "Line-item sold in a specific transaction.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "sale_id": { "type": "integer" },
+        "product_id": { "type": "integer" },
+        "quantity": { "type": "integer" },
+        "price": { "type": "number" }
+      },
+      "required": ["sale_id", "product_id", "quantity", "price"]
+    },
+    "Shift": {
+      "title": "Shift",
+      "description": "Working shift record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "closed_by": { "type": "integer" },
+        "total_sales": { "type": "number" },
+        "closed_at": { "type": "string" }
+      },
+      "required": ["closed_by", "total_sales"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "System configuration key-value pair.",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string" },
+        "value": { "type": "string" }
+      },
+      "required": ["key", "value"]
+    },
+    "ExchangeRateAudit": {
+      "title": "ExchangeRateAudit",
+      "description": "Log of exchange rate change history.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "user_id": { "type": "integer" },
+        "username": { "type": "string" },
+        "old_rate": { "type": "number" },
+        "new_rate": { "type": "number" },
+        "changed_at": { "type": "string" }
+      },
+      "required": ["user_id", "old_rate", "new_rate"]
+    },
+    "CajaCierre": {
+      "title": "CajaCierre",
+      "description": "Summary audit log when closing a register cash draw.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "user_id": { "type": "integer" },
+        "username": { "type": "string" },
+        "admin_id": { "type": "integer" },
+        "admin_username": { "type": "string" },
+        "amount": { "type": "number" },
+        "closed_at": { "type": "string" },
+        "observation": { "type": "string" },
+        "sales_count": { "type": "integer" }
+      },
+      "required": ["user_id", "amount", "sales_count"]
+    },
+    "SecurityLog": {
+      "title": "SecurityLog",
+      "description": "Logs of permissions, role, and credential changes made to users.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "admin_username": { "type": "string" },
+        "target_username": { "type": "string" },
+        "action_type": { "type": "string" },
+        "changes": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["admin_username", "target_username", "action_type", "changes", "timestamp"]
+    },
+    "CashAccount": {
+      "title": "CashAccount",
+      "description": "Seller's cumulative cash account representing active cash balance.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "seller_id": { "type": "integer" },
+        "seller_username": { "type": "string" },
+        "current_balance": { "type": "number" },
+        "last_settlement_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["seller_id", "seller_username", "current_balance"]
+    },
+    "CashMovement": {
+      "title": "CashMovement",
+      "description": "Individual movement representing sales, manual inputs/outputs or refunds.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "seller_id": { "type": "integer" },
+        "sale_id": { "type": "integer" },
+        "type": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "payment_method": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["seller_id", "type", "amount"]
+    },
+    "CashSettlement": {
+      "title": "CashSettlement",
+      "description": "Administrative records of seller cash liquidations/resets.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "seller_id": { "type": "integer" },
+        "seller_username": { "type": "string" },
+        "admin_id": { "type": "integer" },
+        "admin_username": { "type": "string" },
+        "period_start": { "type": "string" },
+        "period_end": { "type": "string" },
+        "calculated_amount": { "type": "number" },
+        "delivered_amount": { "type": "number" },
+        "difference": { "type": "number" },
+        "notes": { "type": "string" },
+        "sale_ids": { "type": "string" },
+        "status": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["seller_id", "seller_username", "admin_id", "admin_username", "calculated_amount", "delivered_amount"]
+    },
+    "FirestoreTransactionLedger": {
+      "title": "FirestoreTransactionLedger",
+      "description": "Cryptographic write transaction audit log verifying user integrity.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "tx_hash": { "type": "string" },
+        "table_name": { "type": "string" },
+        "record_id": { "type": "string" },
+        "operation": { "type": "string" },
+        "user_id": { "type": "integer" },
+        "user_name": { "type": "string" },
+        "user_role": { "type": "string" },
+        "payload_checksum": { "type": "string" },
+        "status": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["tx_hash", "table_name", "record_id", "operation", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Users storage collection"
+    },
+    "/security_logs/{logId}": {
+      "schema": "SecurityLog",
+      "description": "Collection tracking user security and permission changes"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Products inventory collection"
+    },
+    "/clients/{clientId}": {
+      "schema": "Client",
+      "description": "Clients database collection"
+    },
+    "/sales/{saleId}": {
+      "schema": "Sale",
+      "description": "Historic sales registry"
+    },
+    "/sale_items/{saleItemId}": {
+      "schema": "SaleItem",
+      "description": "Historic sales items sold"
+    },
+    "/shifts/{shiftId}": {
+      "schema": "Shift",
+      "description": "Work shifts tracking"
+    },
+    "/settings/{settingKey}": {
+      "schema": "Setting",
+      "description": "Generic system configuration key-values"
+    },
+    "/exchange_rate_audit/{auditId}": {
+      "schema": "ExchangeRateAudit",
+      "description": "Historical exchange rate audit tracking logs"
+    },
+    "/caja_cierres/{cierreId}": {
+      "schema": "CajaCierre",
+      "description": "Registers cash closure summaries"
+    },
+    "/usuarios/{userId}": {
+      "schema": "User",
+      "description": "Real-time client active session synchronization"
+    },
+    "/test/{testId}": {
+      "schema": "Setting",
+      "description": "Connection verification health check collection"
+    },
+    "/cash_accounts/{id}": {
+      "schema": "CashAccount",
+      "description": "Seller active cash accounts collection"
+    },
+    "/cash_movements/{id}": {
+      "schema": "CashMovement",
+      "description": "Individual cash transaction log movements"
+    },
+    "/cash_settlements/{id}": {
+      "schema": "CashSettlement",
+      "description": "Historic cash settlements and administrative resets"
+    },
+    "/firestore_transaction_ledger/{id}": {
+      "schema": "FirestoreTransactionLedger",
+      "description": "Cryptographic write transaction audit log"
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "name": "GTR POS - Terminal Inteligente Punto de Venta",
+  "short_name": "GTR POS",
+  "description": "Sistema de Punto de Venta Profesional, Facturación, Inventario y Control de Caja con soporte 100% Offline.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui", "fullscreen"],
+  "background_color": "#070a10",
+  "theme_color": "#4f46e5",
+  "orientation": "any",
+  "categories": ["business", "finance", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Ventas POS",
+      "short_name": "POS",
+      "description": "Abrir terminal de ventas rápido",
+      "url": "/?view=pos",
+      "icons": [{ "src": "/icon.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "Cajas y Arqueo",
+      "short_name": "Cajas",
+      "description": "Control de caja y turnos",
+      "url": "/?view=cajas",
+      "icons": [{ "src": "/icon.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "Inventario",
+      "short_name": "Stock",
+      "description": "Gestión de catálogo y productos",
+      "url": "/?view=inventory",
+      "icons": [{ "src": "/icon.svg", "sizes": "192x192" }]
+    }
+  ]
+}

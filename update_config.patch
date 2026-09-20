@@ -1,0 +1,42 @@
+--- src/views/ConfiguracionesView.tsx
++++ src/views/ConfiguracionesView.tsx
+@@ -21,2 +21,3 @@
+ import { ColorPicker } from '../components/ColorPicker';
++import { backupDatabaseToDrive } from '../utils/driveBackup';
+ 
+@@ -348,2 +349,15 @@
+ 
++    const handleDriveBackup = async () => {
++        setIsBackingUp(true);
++        try {
++            showNotification?.("Iniciando respaldo en Google Drive...", "success");
++            const backupSuccess = await backupDatabaseToDrive();
++            if (backupSuccess) {
++                showNotification?.("✓ Respaldo subido exitosamente a Google Drive.", "success");
++            }
++        } catch (err: any) {
++            console.error("Backup to Drive failed:", err);
++            showNotification?.("El respaldo en Google Drive falló: " + err.message, "error");
++        } finally {
++            setIsBackingUp(false);
++        }
++    };
++
+     const handleImportBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
+@@ -1507,2 +1521,15 @@
+ 
++                            {/* Drive Backup Button */}
++                            <button
++                                type="button"
++                                disabled={isBackingUp || isImporting}
++                                onClick={handleDriveBackup}
++                                className="p-4 bg-white hover:bg-slate-50/80 dark:bg-[#0c111e] dark:hover:bg-slate-900/60 border border-slate-205 dark:border-slate-850 rounded-2xl flex flex-col items-center justify-center text-center gap-2 cursor-pointer shadow-xs transition group hover:border-[#6366f1]/40 animate-in fade-in sm:col-span-2"
++                            >
++                                <DatabaseBackup size={22} className="text-[#6366f1] transition group-hover:scale-110" />
++                                <div className="flex flex-col gap-0.5">
++                                    <span className="text-[11.5px] font-extrabold text-slate-800 dark:text-slate-200">Respaldar en Google Drive</span>
++                                    <span className="text-[9px] font-bold text-slate-400">Guardar archivo SQLite (.db) en la nube</span>
++                                </div>
++                            </button>
++
+                             {/* Import File Button wrapper */}

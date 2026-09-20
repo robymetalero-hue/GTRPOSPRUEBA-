@@ -1,0 +1,11 @@
+{
+  "name": "Remix: GTR POS: AI Smart Terminal",
+  "description": "A Gemini-powered, voice-activated POS system featuring smart inventory, function calling, mobile-first design, and secure administrative financial management.k",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
