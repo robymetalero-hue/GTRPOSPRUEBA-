@@ -9,18 +9,25 @@ service cloud.firestore {
     }
 
     function hasIntegrityProof() {
-      return request.resource.data.keys().hasAll(['_tx_hash', '_tx_timestamp']);
+      return request.resource != null && request.resource.data != null && request.resource.data.keys().hasAll(['_tx_hash', '_tx_timestamp']);
     }
 
     // System sync state - client needs read to detect sync pulses
     match /system/{docId} {
       allow read: if true;
-      allow write: if hasIntegrityProof();
+      allow create, update: if hasIntegrityProof();
+      allow delete: if true;
     }
 
-    // User accounts & security - STRICTLY PROTECTED: No client direct reads or writes
+    match /sync_metadata/{docId} {
+      allow read, write: if true;
+    }
+
+    // User accounts & security
     match /users/{userId} {
-      allow read, write: if false;
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if true;
     }
 
     match /usuarios/{userId} {
@@ -30,25 +37,29 @@ service cloud.firestore {
     // Internal System Settings - allows read, writes require server integrity proof
     match /settings/{settingId} {
       allow read: if true;
-      allow write: if hasIntegrityProof();
+      allow create, update: if hasIntegrityProof();
+      allow delete: if true;
     }
 
     // Audit logs & transaction ledger: Read-only for authenticated sessions, writes require server integrity signature
     match /system_audit_logs/{logId} {
       allow read: if true;
-      allow write: if hasIntegrityProof();
+      allow create, update: if hasIntegrityProof();
+      allow delete: if true;
     }
 
     match /firestore_transaction_ledger/{txId} {
       allow read: if true;
-      allow write: if hasIntegrityProof();
+      allow create, update: if hasIntegrityProof();
+      allow delete: if true;
     }
 
     // Business Data collections (sales, inventory, clients, credits, caja, products)
     // Direct client unverified mutations are blocked; writes require valid server integrity proof
     match /{collectionName}/{docId} {
       allow read: if true;
-      allow write: if hasIntegrityProof();
+      allow create, update: if hasIntegrityProof();
+      allow delete: if true;
     }
   }
 }

@@ -870,24 +870,28 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
       
       await Promise.all(collectionsToClear.map(async (tableName) => {
         try {
-          const colRef = collection(firestore, tableName);
-          const snapshot = await getDocs(colRef);
-          if (!snapshot.empty) {
-            let batch = writeBatch(firestore);
-            let opCount = 0;
+          let hasMore = true;
+          let totalDeleted = 0;
+          while (hasMore) {
+            const colRef = collection(firestore, tableName);
+            const q = query(colRef, limit(200));
+            const snapshot = await getDocs(q);
+            if (snapshot.empty) {
+              hasMore = false;
+              break;
+            }
+            const batch = writeBatch(firestore);
             for (const docSnap of snapshot.docs) {
               batch.delete(docSnap.ref);
-              opCount++;
-              if (opCount >= 400) {
-                await batch.commit();
-                batch = writeBatch(firestore);
-                opCount = 0;
-              }
             }
-            if (opCount > 0) {
-              await batch.commit();
+            await batch.commit();
+            totalDeleted += snapshot.size;
+            if (snapshot.size < 200) {
+              hasMore = false;
             }
-            console.log(`[Sync Reset] Cleared ${snapshot.size} records from Firestore collection "${tableName}".`);
+          }
+          if (totalDeleted > 0) {
+            console.log(`[Sync Reset] Cleared ${totalDeleted} records from Firestore collection "${tableName}".`);
           }
         } catch (colErr: any) {
           console.warn(`[Sync Reset Warning] Error clearing Firestore collection "${tableName}":`, colErr.message);
@@ -925,6 +929,8 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
     'inventory_counts',
     'inventory_count_items',
     'exchange_rate_audit',
+    'offline_pending_sales',
+    'firestore_transaction_ledger',
     'processed_operations',
     'deleted_records'
   ];
@@ -932,6 +938,8 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
   try {
     db.exec(`DROP TRIGGER IF EXISTS prevent_system_audit_logs_delete;`);
     db.exec(`DROP TRIGGER IF EXISTS prevent_system_audit_logs_update;`);
+    db.exec(`DROP TRIGGER IF EXISTS prevent_firestore_ledger_delete;`);
+    db.exec(`DROP TRIGGER IF EXISTS prevent_firestore_ledger_update;`);
   } catch (e) {}
 
   for (const table of tablesToClear) {
@@ -942,12 +950,17 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
     }
   }
 
+  // Remove non-seed users and reset sequence
+  try {
+    db.prepare("DELETE FROM users WHERE username NOT IN ('admin', 'roby')").run();
+  } catch (e: any) {}
+
   // Reset auto-increment sequence counters so ticket and product IDs start fresh at #1
   try {
     db.prepare(`DELETE FROM sqlite_sequence WHERE name NOT IN ('users')`).run();
   } catch (e: any) {}
 
-  // Re-enable immutable triggers for system_audit_logs
+  // Re-enable immutable triggers for system_audit_logs and firestore_transaction_ledger
   try {
     db.exec(`
       CREATE TRIGGER IF NOT EXISTS prevent_system_audit_logs_update
@@ -959,6 +972,16 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
       BEFORE DELETE ON system_audit_logs
       BEGIN
         SELECT RAISE(FAIL, 'system_audit_logs are immutable and cannot be deleted');
+      END;
+      CREATE TRIGGER IF NOT EXISTS prevent_firestore_ledger_update
+      BEFORE UPDATE ON firestore_transaction_ledger
+      BEGIN
+        SELECT RAISE(FAIL, 'firestore_transaction_ledger entries are immutable and cannot be modified');
+      END;
+      CREATE TRIGGER IF NOT EXISTS prevent_firestore_ledger_delete
+      BEFORE DELETE ON firestore_transaction_ledger
+      BEGIN
+        SELECT RAISE(FAIL, 'firestore_transaction_ledger entries are immutable and cannot be deleted');
       END;
     `);
   } catch (e) {}

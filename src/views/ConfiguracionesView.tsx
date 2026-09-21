@@ -429,13 +429,55 @@ export default function ConfiguracionesView() {
         setImportError(null);
         setImportSuccess(false);
 
+        // Check if SQLite database file (.db, .sqlite, .sqlite3)
+        const lowerName = file.name.toLowerCase();
+        if (lowerName.endsWith('.db') || lowerName.endsWith('.sqlite') || lowerName.endsWith('.sqlite3')) {
+            if (!window.confirm(`¿Deseas restaurar la base de datos SQLite "${file.name}"? Los datos actuales serán reemplazados por el contenido del archivo de respaldo.`)) {
+                setIsValidatingFile(false);
+                if (event.target) event.target.value = "";
+                return;
+            }
+
+            showNotification?.(`Procesando archivo SQLite nativo (${file.name})...`, "info");
+            const reader = new FileReader();
+            reader.onload = async () => {
+                try {
+                    setIsImporting(true);
+                    showNotification?.("Restaurando base de datos SQLite...", "info");
+                    const base64Data = (reader.result as string).split(',')[1];
+                    const res = await fetch('/api/backup/upload-sqlite', {
+                        method: 'POST',
+                        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({ filename: file.name, base64Data })
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data.success) {
+                        throw new Error(data.error || "Fallo al restaurar archivo SQLite.");
+                    }
+                    showNotification?.(data.message || "✓ Base de datos restaurada con éxito.", "success");
+                    setImportSuccess(true);
+                    setTimeout(() => window.location.reload(), 1500);
+                } catch (err: any) {
+                    console.error("SQLite restore error:", err);
+                    setImportError(err.message);
+                    showNotification?.("Error: " + err.message, "error");
+                } finally {
+                    setIsImporting(false);
+                    setIsValidatingFile(false);
+                    if (event.target) event.target.value = "";
+                }
+            };
+            reader.readAsDataURL(file);
+            return;
+        }
+
         try {
             const text = await file.text();
             let parsed: any;
             try {
                 parsed = JSON.parse(text);
             } catch (parseErr) {
-                throw new Error("El archivo seleccionado no es un archivo JSON válido o está corrupto.");
+                throw new Error("El archivo seleccionado no es un archivo JSON o SQLite válido.");
             }
 
             // Validate via backend endpoint with auth headers
@@ -1837,7 +1879,7 @@ export default function ConfiguracionesView() {
                             <label className={`p-4 bg-white hover:bg-slate-50/80 dark:bg-[#0c111e] dark:hover:bg-slate-900/60 border border-slate-205 dark:border-slate-850 rounded-2xl flex flex-col items-center justify-center text-center gap-2 cursor-pointer shadow-xs transition group hover:border-[#6366f1]/40 relative sm:col-span-2 ${isImporting || isValidatingFile ? 'opacity-65 pointer-events-none' : ''} animate-in fade-in`}>
                                 <input
                                     type="file"
-                                    accept=".json"
+                                    accept=".json,.db,.sqlite,.sqlite3"
                                     onChange={handleSelectBackupFile}
                                     className="hidden"
                                     disabled={isBackingUp || isImporting || isValidatingFile}
@@ -1849,9 +1891,9 @@ export default function ConfiguracionesView() {
                                 )}
                                 <div className="flex flex-col gap-0.5">
                                     <span className="text-[11.5px] font-extrabold text-slate-800 dark:text-slate-200">
-                                        {isImporting ? 'Restaurando...' : isValidatingFile ? 'Validando Archivo...' : 'Importar Copia JSON'}
+                                        {isImporting ? 'Restaurando Base de Datos...' : isValidatingFile ? 'Procesando Respaldo...' : 'Restaurar Copia de Seguridad (.json / .db)'}
                                     </span>
-                                    <span className="text-[9px] font-bold text-slate-400">Integrar datos de respaldo</span>
+                                    <span className="text-[9px] font-bold text-slate-400">Cargar archivo de respaldo JSON o base SQLite</span>
                                 </div>
                             </label>
 

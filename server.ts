@@ -1821,6 +1821,167 @@ Responde estrictamente en formato JSON utilizando el esquema de salida indicado,
     }
   });
 
+  // REST API: Database Integrity Hashes & Physical Health (IndexedDB vs SQLite vs Server Verification)
+  app.get("/api/diagnose/database-integrity-hashes", async (req, res) => {
+    try {
+      // 1. SQLite Physical Integrity Check
+      const integrityCheckRows = db.prepare("PRAGMA integrity_check").all() as any[];
+      const quickCheckRows = db.prepare("PRAGMA quick_check").all() as any[];
+      const fkCheckRows = db.prepare("PRAGMA foreign_key_check").all() as any[];
+
+      const isIntegrityOk = integrityCheckRows.length === 1 && integrityCheckRows[0]?.integrity_check === 'ok';
+      const isQuickCheckOk = quickCheckRows.length === 1 && quickCheckRows[0]?.quick_check === 'ok';
+      const fkViolations = fkCheckRows.length;
+
+      // File info
+      const candidatePaths = ['gtr_pos.db', 'database.sqlite', 'local_database.sqlite'];
+      let fileSizeBytes = 0;
+      let lastModified = "";
+      let activeDbFile = "gtr_pos.db";
+      for (const p of candidatePaths) {
+        const full = path.resolve(process.cwd(), p);
+        if (fs.existsSync(full)) {
+          const st = fs.statSync(full);
+          if (st.size > fileSizeBytes) {
+            fileSizeBytes = st.size;
+            lastModified = st.mtime.toISOString();
+            activeDbFile = p;
+          }
+        }
+      }
+
+      // 2. Compute canonical table hashes for core business tables
+      // Products
+      const prodRows = db.prepare("SELECT id, name, category, sku, stock, price_unit FROM products ORDER BY id ASC").all() as any[];
+      const prodStr = prodRows.map(r => `[id=${r.id}|name=${(r.name||'').trim()}|cat=${(r.category||'').trim()}|sku=${(r.sku||'').trim()}|price=${Number(r.price_unit||0).toFixed(2)}|stock=${Number(r.stock||0).toFixed(2)}]`).join('\n');
+      const prodStockSum = prodRows.reduce((s, r) => s + (Number(r.stock) || 0), 0);
+      const prodPriceSum = prodRows.reduce((s, r) => s + (Number(r.price_unit) || 0), 0);
+      const prodHash = crypto.createHash('sha256').update(prodStr).digest('hex');
+
+      // Clients
+      const clientRows = db.prepare("SELECT id, name, phone, points FROM clients ORDER BY id ASC").all() as any[];
+      const clientStr = clientRows.map(r => `[id=${r.id}|name=${(r.name||'').trim()}|phone=${(r.phone||'').trim()}|pts=${Number(r.points||0)}]`).join('\n');
+      const clientPointsSum = clientRows.reduce((s, r) => s + (Number(r.points) || 0), 0);
+      const clientHash = crypto.createHash('sha256').update(clientStr).digest('hex');
+
+      // Departments
+      const deptRows = db.prepare("SELECT id, name FROM departments ORDER BY id ASC").all() as any[];
+      const deptStr = deptRows.map(r => `[id=${r.id}|name=${(r.name||'').trim()}]`).join('\n');
+      const deptHash = crypto.createHash('sha256').update(deptStr).digest('hex');
+
+      // Settings
+      const settingRows = db.prepare("SELECT key, value FROM settings ORDER BY key ASC").all() as any[];
+      const settingStr = settingRows.map(r => `[key=${(r.key||'').trim()}|val=${(r.value||'').trim()}]`).join('\n');
+      const settingHash = crypto.createHash('sha256').update(settingStr).digest('hex');
+
+      // Sales
+      const salesRows = db.prepare("SELECT id, total, discount, payment_method, cierre_id FROM sales ORDER BY id ASC").all() as any[];
+      const salesStr = salesRows.map(r => `[id=${r.id}|total=${Number(r.total||0).toFixed(2)}|disc=${Number(r.discount||0).toFixed(2)}|method=${(r.payment_method||'').trim()}|cierre=${r.cierre_id||''}]`).join('\n');
+      const salesTotalSum = salesRows.reduce((s, r) => s + (Number(r.total) || 0), 0);
+      const salesHash = crypto.createHash('sha256').update(salesStr).digest('hex');
+
+      // Sale Items
+      const itemsRows = db.prepare("SELECT id, sale_id, product_id, quantity, price FROM sale_items ORDER BY id ASC").all() as any[];
+      const itemsStr = itemsRows.map(r => `[id=${r.id}|sale=${r.sale_id}|prod=${r.product_id}|qty=${Number(r.quantity||0).toFixed(2)}|price=${Number(r.price||0).toFixed(2)}]`).join('\n');
+      const itemsQtySum = itemsRows.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+      const itemsHash = crypto.createHash('sha256').update(itemsStr).digest('hex');
+
+      // Cash movements
+      const cashRows = db.prepare("SELECT id, type, amount, status FROM cash_movements ORDER BY id ASC").all() as any[];
+      const cashStr = cashRows.map(r => `[id=${r.id}|type=${(r.type||'').trim()}|amount=${Number(r.amount||0).toFixed(2)}|status=${(r.status||'').trim()}]`).join('\n');
+      const cashAmountSum = cashRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const cashHash = crypto.createHash('sha256').update(cashStr).digest('hex');
+
+      // Master overall hash
+      const masterStr = `${prodHash}:${clientHash}:${deptHash}:${settingHash}:${salesHash}:${itemsHash}:${cashHash}`;
+      const globalMasterHash = crypto.createHash('sha256').update(masterStr).digest('hex');
+
+      res.json({
+        success: true,
+        timestamp: getBoliviaISOString(),
+        sqliteIntegrity: {
+          status: isIntegrityOk ? 'ok' : 'error',
+          integrityMessage: isIntegrityOk ? 'OK (B-Trees y estructuras de página verificadas)' : JSON.stringify(integrityCheckRows),
+          quickCheck: isQuickCheckOk ? 'ok' : 'error',
+          foreignKeyViolations: fkViolations,
+          fileSizeBytes,
+          activeDbFile,
+          lastModified
+        },
+        tables: {
+          products: {
+            name: "Productos (Catálogo)",
+            count: prodRows.length,
+            hash: prodHash,
+            aggregates: { stockSum: Math.round(prodStockSum * 100) / 100, priceSum: Math.round(prodPriceSum * 100) / 100 }
+          },
+          clients: {
+            name: "Clientes (Fidelización)",
+            count: clientRows.length,
+            hash: clientHash,
+            aggregates: { pointsSum: clientPointsSum }
+          },
+          departments: {
+            name: "Departamentos / Categorías",
+            count: deptRows.length,
+            hash: deptHash,
+            aggregates: {}
+          },
+          settings: {
+            name: "Configuraciones del Sistema",
+            count: settingRows.length,
+            hash: settingHash,
+            aggregates: {}
+          },
+          sales: {
+            name: "Ventas (Transacciones)",
+            count: salesRows.length,
+            hash: salesHash,
+            aggregates: { totalSum: Math.round(salesTotalSum * 100) / 100 }
+          },
+          sale_items: {
+            name: "Detalle de Ventas (Ítems)",
+            count: itemsRows.length,
+            hash: itemsHash,
+            aggregates: { quantitySum: Math.round(itemsQtySum * 100) / 100 }
+          },
+          cash_movements: {
+            name: "Movimientos de Caja",
+            count: cashRows.length,
+            hash: cashHash,
+            aggregates: { amountSum: Math.round(cashAmountSum * 100) / 100 }
+          }
+        },
+        globalMasterHash
+      });
+    } catch (err: any) {
+      console.error("[Database Hash Diagnostic Error]:", err);
+      res.status(500).json({ error: "Fallo al calcular hashes de integridad: " + err.message });
+    }
+  });
+
+  // REST API: Export pristine core tables to immediately realign client IndexedDB cache
+  app.get("/api/diagnose/clean-tables-export", (req, res) => {
+    try {
+      const products = db.prepare("SELECT * FROM products ORDER BY id ASC").all();
+      const clients = db.prepare("SELECT * FROM clients ORDER BY id ASC").all();
+      const departments = db.prepare("SELECT * FROM departments ORDER BY id ASC").all();
+      const settings = db.prepare("SELECT * FROM settings ORDER BY key ASC").all();
+
+      res.json({
+        success: true,
+        products,
+        clients,
+        departments,
+        settings,
+        timestamp: getBoliviaISOString()
+      });
+    } catch (err: any) {
+      console.error("[Clean Tables Export Error]:", err);
+      res.status(500).json({ error: "Error al exportar tablas: " + err.message });
+    }
+  });
+
   // REST API: Text Chat assistant with Gemini 3.5 Flash (for non-live written commands)
   app.post("/api/chat-text", async (req, res) => {
     const { text, cart } = req.body;
@@ -3629,6 +3790,14 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         console.warn("[Backup Import Warning] Could not create pre-restore safety copy:", bakErr.message);
       }
 
+      // Temporarily disable immutable triggers so system_audit_logs / ledger in backup can be loaded cleanly
+      try {
+        db.exec(`DROP TRIGGER IF EXISTS prevent_system_audit_logs_delete;`);
+        db.exec(`DROP TRIGGER IF EXISTS prevent_system_audit_logs_update;`);
+        db.exec(`DROP TRIGGER IF EXISTS prevent_firestore_ledger_delete;`);
+        db.exec(`DROP TRIGGER IF EXISTS prevent_firestore_ledger_update;`);
+      } catch (trigErr) {}
+
       let totalRestoredRows = 0;
       const restoredRecordCounts: Record<string, number> = {};
 
@@ -3716,6 +3885,20 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       });
 
       importTx();
+
+      // Recreate immutable triggers after restoration
+      try {
+        db.exec(`
+          CREATE TRIGGER IF NOT EXISTS prevent_system_audit_logs_update
+          BEFORE UPDATE ON system_audit_logs BEGIN SELECT RAISE(FAIL, 'system_audit_logs immutable'); END;
+          CREATE TRIGGER IF NOT EXISTS prevent_system_audit_logs_delete
+          BEFORE DELETE ON system_audit_logs BEGIN SELECT RAISE(FAIL, 'system_audit_logs immutable'); END;
+          CREATE TRIGGER IF NOT EXISTS prevent_firestore_ledger_update
+          BEFORE UPDATE ON firestore_transaction_ledger BEGIN SELECT RAISE(FAIL, 'ledger immutable'); END;
+          CREATE TRIGGER IF NOT EXISTS prevent_firestore_ledger_delete
+          BEFORE DELETE ON firestore_transaction_ledger BEGIN SELECT RAISE(FAIL, 'ledger immutable'); END;
+        `);
+      } catch (trigErr) {}
 
       // 4. Optimize SQLite query plans and rebuild indexes post-restoration
       try {
@@ -4002,6 +4185,135 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       }
     } catch (e: any) {
       res.status(500).json({ error: "No se pudo restaurar el respaldo de seguridad: " + e.message });
+    }
+  });
+
+  // Endpoint: Upload & Restore native SQLite database (.db, .sqlite, .sqlite3)
+  app.post("/api/backup/upload-sqlite", enforcePermission('admin_settings'), async (req, res) => {
+    try {
+      const { filename, base64Data } = req.body;
+      if (!base64Data) {
+        return res.status(400).json({ error: "No se recibieron datos de archivo SQLite en base64." });
+      }
+
+      const safeName = (filename || 'uploaded_backup.db').replace(/[^a-zA-Z0-9_.-]/g, '_');
+      const tempPath = path.resolve(process.cwd(), 'backups', `temp_upload_${Date.now()}_${safeName}`);
+      
+      const buffer = Buffer.from(base64Data, 'base64');
+      fs.writeFileSync(tempPath, buffer);
+
+      createLocalDbSnapshot('pre_upload_restore');
+
+      // Temporarily drop immutable triggers to allow clean restoration of logs/ledger if present in backup
+      try {
+        db.exec(`DROP TRIGGER IF EXISTS prevent_system_audit_logs_delete;`);
+        db.exec(`DROP TRIGGER IF EXISTS prevent_system_audit_logs_update;`);
+        db.exec(`DROP TRIGGER IF EXISTS prevent_firestore_ledger_delete;`);
+        db.exec(`DROP TRIGGER IF EXISTS prevent_firestore_ledger_update;`);
+      } catch (trigErr) {}
+
+      const DatabaseConstructor = (await import('better-sqlite3')).default;
+      let backupDb: any;
+      try {
+        backupDb = new DatabaseConstructor(tempPath, { readonly: true });
+        const check = backupDb.pragma('integrity_check');
+        if (!check || check[0]?.integrity_check !== 'ok') {
+          throw new Error("El archivo SQLite no superó la prueba de integridad.");
+        }
+      } catch (err: any) {
+        if (backupDb) try { backupDb.close(); } catch (e) {}
+        try { fs.unlinkSync(tempPath); } catch (e) {}
+        return res.status(400).json({ error: "Archivo SQLite inválido o corrupto: " + err.message });
+      }
+
+      const tables = (backupDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'gsi_%'").all() as any[]).map(t => t.name);
+
+      let restoredTablesCount = 0;
+      let restoredRowsCount = 0;
+      const restoredRecordCounts: Record<string, number> = {};
+
+      db.transaction(() => {
+        db.pragma('foreign_keys = OFF');
+        for (const table of tables) {
+          try {
+            const rows = backupDb.prepare(`SELECT * FROM "${table}"`).all();
+            restoredRecordCounts[table] = rows.length;
+            db.prepare(`DELETE FROM "${table}"`).run();
+            if (rows.length === 0) continue;
+            const firstRowKeys = Object.keys(rows[0]);
+            const placeholders = firstRowKeys.map(() => '?').join(', ');
+            const insertSql = `INSERT OR REPLACE INTO "${table}" (${firstRowKeys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders})`;
+            const stmt = db.prepare(insertSql);
+            for (const r of rows) {
+              if (table === 'users' && r.password && !isPasswordHashed(r.password)) {
+                r.password = hashPassword(r.password);
+              }
+              const values = firstRowKeys.map(k => r[k]);
+              stmt.run(...values);
+            }
+            restoredTablesCount++;
+            restoredRowsCount += rows.length;
+          } catch (tableErr: any) {
+            console.warn(`[SQLite Upload Restore] Table ${table} warning:`, tableErr.message);
+          }
+        }
+        db.pragma('foreign_keys = ON');
+      })();
+
+      backupDb.close();
+      try { fs.unlinkSync(tempPath); } catch (e) {}
+
+      // Recreate immutable triggers
+      try {
+        db.exec(`
+          CREATE TRIGGER IF NOT EXISTS prevent_system_audit_logs_update
+          BEFORE UPDATE ON system_audit_logs BEGIN SELECT RAISE(FAIL, 'system_audit_logs immutable'); END;
+          CREATE TRIGGER IF NOT EXISTS prevent_system_audit_logs_delete
+          BEFORE DELETE ON system_audit_logs BEGIN SELECT RAISE(FAIL, 'system_audit_logs immutable'); END;
+          CREATE TRIGGER IF NOT EXISTS prevent_firestore_ledger_update
+          BEFORE UPDATE ON firestore_transaction_ledger BEGIN SELECT RAISE(FAIL, 'ledger immutable'); END;
+          CREATE TRIGGER IF NOT EXISTS prevent_firestore_ledger_delete
+          BEFORE DELETE ON firestore_transaction_ledger BEGIN SELECT RAISE(FAIL, 'ledger immutable'); END;
+        `);
+      } catch (trigErr) {}
+
+      // Align sqlite_sequence with highest ID
+      try {
+        for (const t of tables) {
+          try {
+            const tableCols = db.prepare(`PRAGMA table_info("${t}")`).all() as any[];
+            if (tableCols.some(c => c.name === 'id')) {
+              const maxRow = db.prepare(`SELECT MAX(id) as maxId FROM "${t}"`).get() as any;
+              if (maxRow && maxRow.maxId !== null && maxRow.maxId !== undefined) {
+                db.prepare(`INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)`).run(t, maxRow.maxId);
+              }
+            }
+          } catch (colErr) {}
+        }
+      } catch (seqErr) {}
+
+      try {
+        db.exec('REINDEX;');
+        db.pragma('optimize;');
+      } catch (e) {}
+
+      // Push restored data to Cloud Firestore in background
+      pushAllLocalToFirestore().then(() => {
+        console.log("[Sync Success] Post-upload-sqlite sync to Firestore completed.");
+      }).catch((err: any) => {
+        console.error("[Sync Error] Post-upload-sqlite sync error:", err.message);
+      });
+
+      res.json({
+        success: true,
+        message: `✓ Base de datos SQLite restaurada con éxito. Se restauraron ${restoredRowsCount} registros en ${restoredTablesCount} tablas desde "${safeName}".`,
+        restoredTablesCount,
+        restoredRowsCount,
+        restoredRecordCounts
+      });
+    } catch (e: any) {
+      console.error("[Upload SQLite Restore Error]:", e);
+      res.status(500).json({ error: "Error al procesar el archivo SQLite: " + e.message });
     }
   });
 

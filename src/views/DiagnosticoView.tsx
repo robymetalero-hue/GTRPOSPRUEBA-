@@ -21,6 +21,7 @@ import {
   fromCents,
   CartItemMath
 } from '../utils/fiscalMath';
+import { DatabaseIntegrityTool } from '../components/DatabaseIntegrityTool';
 
 interface AuditTemplate {
   title: string;
@@ -89,7 +90,7 @@ export default function DiagnosticoView() {
   const [loading, setLoading] = useState(false);
   const [systemData, setSystemData] = useState<any>(null);
   const [lastCheckTime, setLastCheckTime] = useState<string>("");
-  const [activeTab, setActiveTab] = useState<'suggestions' | 'automatic' | 'assist' | 'kb' | 'code-review' | 'math-tests'>('suggestions');
+  const [activeTab, setActiveTab] = useState<'suggestions' | 'automatic' | 'assist' | 'kb' | 'code-review' | 'math-tests' | 'db-integrity'>('suggestions');
   const [integrityLoading, setIntegrityLoading] = useState(false);
   const [integrityResult, setIntegrityResult] = useState<any>(null);
   const [integrityMessage, setIntegrityMessage] = useState<string | null>(null);
@@ -720,6 +721,21 @@ export default function DiagnosticoView() {
           Estado Sistema
         </button>
         <button
+          id="tab-btn-db-integrity"
+          onClick={() => setActiveTab('db-integrity')}
+          className={`flex-1 min-w-[170px] py-2 text-xs font-medium rounded-lg transition flex items-center justify-center gap-1.5 ${
+            activeTab === 'db-integrity'
+              ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm font-bold'
+              : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
+          }`}
+        >
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+          <span>Integridad Hashes</span>
+          <span className="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+            SHA-256
+          </span>
+        </button>
+        <button
           id="tab-btn-kb"
           onClick={() => setActiveTab('kb')}
           className={`flex-1 min-w-[130px] py-2 text-xs font-medium rounded-lg transition ${
@@ -1275,6 +1291,23 @@ export default function DiagnosticoView() {
                     </button>
                   </div>
                 )}
+
+                {/* Banner de Enlace a la Validación Criptográfica de Hashes */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between flex-wrap gap-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+                    <span className="text-slate-700 dark:text-slate-300">
+                      ¿Deseas verificar no-corrupción post-restauración mediante <strong>hashes SHA-256 canónicos</strong> entre IndexedDB y SQLite?
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab('db-integrity')}
+                    className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 rounded-lg font-bold text-xs transition cursor-pointer flex items-center gap-1"
+                  >
+                    <span>Abrir Auditoría Hashes</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
               </div>
 
               {/* Real-time scanning details */}
@@ -2294,6 +2327,19 @@ export default function DiagnosticoView() {
                 </div>
               </div>
             </div>
+          </motion.div>
+        )}
+
+        {/* DATABASE INTEGRITY HASHES (INDEXEDDB & SQLITE) TAB */}
+        {activeTab === 'db-integrity' && (
+          <motion.div
+            key="db-integrity"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="space-y-6"
+          >
+            <DatabaseIntegrityTool />
           </motion.div>
         )}
       </AnimatePresence>
