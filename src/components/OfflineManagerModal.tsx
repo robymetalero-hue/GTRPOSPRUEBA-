@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
+import { hardRefreshApp } from '../utils/appRefresh';
 import { 
     getOfflineSales, 
     getOfflineActions, 
@@ -1240,6 +1241,33 @@ export const OfflineManagerModal: React.FC<OfflineManagerModalProps> = ({ isOpen
                                                 Almacén de Ventas, Acciones y Caché de Catálogo activos.
                                             </span>
                                         </div>
+                                    </div>
+
+                                    {/* Nueva tarjeta: Versión de Aplicación y Recarga Limpia */}
+                                    <div className="p-3.5 sm:p-4 rounded-xl bg-slate-50 dark:bg-[#070b13] border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                        <div className="flex flex-col gap-0.5">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Versión del Sistema</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                                                    v2.4.1 (Al día)
+                                                </span>
+                                            </div>
+                                            <span className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                                                Si notas que el navegador tarda en mostrar cambios o correcciones recientes, puedes forzar una recarga limpia sin perder ventas pendientes.
+                                            </span>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (window.confirm("¿Forzar actualización limpia del sistema? Se limpiará la memoria caché de scripts y se recargará la última versión disponible.")) {
+                                                    hardRefreshApp();
+                                                }
+                                            }}
+                                            className="px-3.5 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition cursor-pointer shrink-0"
+                                        >
+                                            <RefreshCw size={13} />
+                                            <span>Forzar Actualización Limpia</span>
+                                        </button>
                                     </div>
                                 </div>
                             )}

@@ -181,11 +181,22 @@ window.addEventListener('unhandledrejection', async (event) => {
 // Service Worker Registration for PWA Standalone & Offline Execution
 if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
+    // updateViaCache: 'none' forces browser to always query server directly for sw.js changes
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
       .then((reg) => {
         (window as any).__pwaServiceWorkerReg = reg;
         console.log('[PWA] Service Worker registrado exitosamente con scope:', reg.scope);
         
+        // Immediate check on load to detect newly deployed code
+        reg.update().catch(() => {});
+
+        // Periodic background update check every 2.5 minutes when online
+        setInterval(() => {
+          if (navigator.onLine) {
+            reg.update().catch(() => {});
+          }
+        }, 150000);
+
         // If there is already a waiting worker on load
         if (reg.waiting && navigator.serviceWorker.controller) {
           window.dispatchEvent(new CustomEvent('pwa-update-available', { detail: { registration: reg } }));
@@ -207,6 +218,27 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
       .catch((err) => {
         console.warn('[PWA] Error al registrar Service Worker:', err);
       });
+  });
+
+  // When new Service Worker activates and takes control:
+  let hasTriggeredAutoRefresh = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hasTriggeredAutoRefresh) return;
+
+    // Check if the user currently has active uncompleted items in POS cart
+    try {
+      const activeCart = localStorage.getItem('active_pos_cart');
+      const items = activeCart ? JSON.parse(activeCart) : [];
+      if (items && Array.isArray(items) && items.length > 0) {
+        console.log('[PWA] Nueva versión activada. Reteniendo recarga automática porque hay productos en el carrito.');
+        window.dispatchEvent(new CustomEvent('pwa-update-available'));
+        return;
+      }
+    } catch (_) {}
+
+    hasTriggeredAutoRefresh = true;
+    console.log('[PWA] Nueva versión activada. Recargando de forma transparente...');
+    window.location.reload();
   });
 }
 

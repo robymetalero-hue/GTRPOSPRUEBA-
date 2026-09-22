@@ -730,11 +730,14 @@ async function startServer() {
 
   // REST API: App Version sync service to trigger mandatory updates on client devices
   app.get("/api/app-version", (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     try {
       const versionRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("app_version") as any;
       const notesRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("app_release_notes") as any;
       
-      const version = versionRow ? versionRow.value : "2.4.0";
+      const version = versionRow ? versionRow.value : "2.4.1";
       const release_notes = notesRow ? notesRow.value : "Optimización de caché PWA, actualización transparente de clientes instalados y prevención de errores de conexión fiscal.";
       
       res.json({
@@ -744,7 +747,7 @@ async function startServer() {
       });
     } catch (e) {
       res.json({
-        version: "2.4.0",
+        version: "2.4.1",
         release_notes: "Optimización de caché PWA, actualización transparente de clientes instalados y prevención de errores de conexión fiscal.",
         force_reload: true
       });
@@ -9910,6 +9913,34 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
     }
   });
 
+  // Dedicated handlers for /sw.js and /version.json with strict zero-cache policy
+  // This guarantees all client browsers always retrieve the latest Service Worker and Version definitions
+  app.get(['/sw.js', '/service-worker.js'], (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    const prodSw = path.join(process.cwd(), 'dist/sw.js');
+    const devSw = path.join(process.cwd(), 'public/sw.js');
+    const filePath = (process.env.NODE_ENV === 'production' && fs.existsSync(prodSw)) ? prodSw : devSw;
+    if (fs.existsSync(filePath)) {
+      return res.sendFile(filePath);
+    }
+    next();
+  });
+
+  app.get('/version.json', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const verPath = path.join(process.cwd(), 'public/version.json');
+    if (fs.existsSync(verPath)) {
+      return res.sendFile(verPath);
+    }
+    next();
+  });
+
   // Vite development or static files server
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -9920,10 +9951,15 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
   } else {
     const distPath = path.join(process.cwd(), 'dist');
 
-    // Prevent caching for HTML entry point so PWA / installed web apps always load latest assets
+    // Prevent caching for HTML entry point, service worker and version manifests so PWA always loads latest assets
     app.use(express.static(distPath, {
       setHeaders: (res, filePath) => {
-        if (filePath.endsWith('.html')) {
+        if (
+          filePath.endsWith('.html') ||
+          filePath.endsWith('sw.js') ||
+          filePath.endsWith('version.json') ||
+          filePath.endsWith('manifest.json')
+        ) {
           res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
           res.setHeader('Pragma', 'no-cache');
           res.setHeader('Expires', '0');
