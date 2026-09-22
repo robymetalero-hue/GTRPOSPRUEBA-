@@ -1,5 +1,5 @@
 import { safeDispatchEvent } from "../utils/events";
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { User, CartItem, Product, Client, ReceiptTemplate, Department, SaleTab, RgbThemeSettings } from '../types';
 import { normalizePermissions } from '../utils/permissions';
 import { initializeApp, getApps, getApp } from 'firebase/app';
@@ -111,6 +111,12 @@ interface AppContextType {
     isInitializing: boolean;
     kioskMode: boolean;
     setKioskMode: (k: boolean) => void;
+    isSupervisorUnlocked: boolean;
+    setIsSupervisorUnlocked: (val: boolean) => void;
+    supervisorInfo: { id: number; username: string; role: string } | null;
+    relockKiosk: () => void;
+    isFullscreen: boolean;
+    toggleFullscreen: () => void;
     user: User | null;
     setUser: (u: User | null) => void;
     darkMode: boolean;
@@ -237,6 +243,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     });
     const [kioskMode, setKioskMode] = useState(() => localStorage.getItem('kioskMode') === 'true');
+    const [isSupervisorUnlocked, setIsSupervisorUnlocked] = useState(false);
+    const [supervisorInfo, setSupervisorInfo] = useState<{ id: number; username: string; role: string } | null>(null);
+    const [isFullscreen, setIsFullscreen] = useState<boolean>(() => typeof document !== 'undefined' ? !!document.fullscreenElement : false);
+
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            setIsFullscreen(typeof document !== 'undefined' ? !!document.fullscreenElement : false);
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+        return () => {
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+            document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+        };
+    }, []);
+
+    const toggleFullscreen = useCallback(() => {
+        try {
+            if (!document.fullscreenElement) {
+                if (document.documentElement.requestFullscreen) {
+                    document.documentElement.requestFullscreen().catch(() => {});
+                } else if ((document.documentElement as any).webkitRequestFullscreen) {
+                    (document.documentElement as any).webkitRequestFullscreen();
+                }
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen().catch(() => {});
+                } else if ((document as any).webkitExitFullscreen) {
+                    (document as any).webkitExitFullscreen();
+                }
+            }
+        } catch (err) {
+            console.warn("Fullscreen toggle error:", err);
+        }
+    }, []);
+
+    const relockKiosk = useCallback(() => {
+        setIsSupervisorUnlocked(false);
+        setSupervisorInfo(null);
+    }, []);
+
     const [isOffline, setIsOffline] = useState(() => !window.navigator.onLine);
     const [isSyncing, setIsSyncing] = useState(false);
     const syncRunningRef = useRef(false);
@@ -568,6 +615,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             } else {
                 localStorage.removeItem('user');
                 localStorage.removeItem('auth_token');
+                setIsSupervisorUnlocked(false);
+                setSupervisorInfo(null);
             }
             setCachedUserProfile(normalizedUser).catch(() => {});
         } catch (err) {
@@ -1953,15 +2002,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setKioskMode(k); 
                 localStorage.setItem('kioskMode', String(k)); 
                 try {
+                    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('auth_token') : null;
+                    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+                    if (token) headers['Authorization'] = `Bearer ${token}`;
                     await fetch('/api/settings/kiosk', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers,
                         body: JSON.stringify({ kiosk_mode: k })
                     });
                 } catch (e) {
                     console.error("Error saving kiosk mode to server", e);
                 }
             },
+            isSupervisorUnlocked,
+            setIsSupervisorUnlocked,
+            supervisorInfo,
+            relockKiosk,
+            isFullscreen,
+            toggleFullscreen,
             cart,
             addToCart,
             updateCartItemQuantity,

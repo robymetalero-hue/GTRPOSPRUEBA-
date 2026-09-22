@@ -247,7 +247,8 @@ async function startServer() {
       '/api/health',
       '/api/app-version',
       '/api/auth/login',
-      '/api/auth/recover-password'
+      '/api/auth/recover-password',
+      '/api/auth/verify-supervisor'
     ];
 
     const isPublicRoute = 
@@ -733,6 +734,80 @@ async function startServer() {
     res.status(403).json({ 
       error: "La recuperación automática de contraseñas ha sido desactivada por políticas de seguridad estrictas del sistema fiscal. Por favor, solicite un restablecimiento manual directamente al Administrador." 
     });
+  });
+
+  // REST API: Quick Supervisor Authorization / Kiosk Unlock
+  app.post("/api/auth/verify-supervisor", (req, res) => {
+    try {
+      const { username, password, pin } = req.body;
+      const targetPassword = String(password || pin || '').trim();
+
+      if (!targetPassword) {
+        return res.status(400).json({ error: "Se requiere la contraseña o PIN de supervisor." });
+      }
+
+      let supervisorUser: any = null;
+
+      if (username && String(username).trim()) {
+        const candidate = db.prepare(
+          "SELECT id, username, role, password FROM users WHERE username = ? COLLATE NOCASE AND (role = 'admin' OR role = 'propietario')"
+        ).get(String(username).trim()) as any;
+
+        if (candidate && verifyPassword(targetPassword, candidate.password)) {
+          supervisorUser = candidate;
+        }
+      } else {
+        // If username was omitted, match against any active admin or propietario
+        const admins = db.prepare(
+          "SELECT id, username, role, password FROM users WHERE role = 'admin' OR role = 'propietario'"
+        ).all() as any[];
+
+        for (const candidate of admins) {
+          if (verifyPassword(targetPassword, candidate.password)) {
+            supervisorUser = candidate;
+            break;
+          }
+        }
+      }
+
+      if (!supervisorUser) {
+        return res.status(401).json({ 
+          error: "Credenciales de supervisor incorrectas o usuario no posee privilegios de administrador/propietario." 
+        });
+      }
+
+      const auditUser = (req as any).auditUser || {};
+      try {
+        insertSystemAuditLog({
+          eventType: 'desbloqueo_supervisor_kiosco',
+          category: 'seguridad',
+          module: 'kiosco',
+          action: `Desbloqueo temporal del Modo Kiosco autorizado por ${supervisorUser.username} (${supervisorUser.role})`,
+          severity: 'warning',
+          entityType: 'terminal',
+          entityId: 'kiosk_lock',
+          entityName: 'Terminal Kiosco',
+          userId: supervisorUser.id,
+          userName: supervisorUser.username,
+          userRole: supervisorUser.role,
+          reason: `Desbloqueo temporal solicitado en terminal operada por ${auditUser.userName || 'cajero'}`,
+          status: 'success'
+        });
+      } catch (auditErr: any) {
+        console.warn("[Audit Error] Failed to log supervisor unlock:", auditErr.message);
+      }
+
+      res.json({
+        success: true,
+        supervisor: {
+          id: supervisorUser.id,
+          username: supervisorUser.username,
+          role: supervisorUser.role
+        }
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // REST API: App Version sync service to trigger mandatory updates on client devices
@@ -7156,6 +7231,13 @@ DIRECTIVAS CRÍTICAS:
 
   app.post("/api/settings/kiosk", (req, res) => {
     try {
+      const verifiedUser = (req as any).verifiedUser;
+      if (!verifiedUser || (verifiedUser.role !== 'admin' && verifiedUser.role !== 'propietario')) {
+        return res.status(403).json({ 
+          error: "Acceso denegado: solo un administrador o propietario puede modificar el Modo Kiosco." 
+        });
+      }
+
       const { kiosk_mode } = req.body;
       const oldRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('kiosk_mode') as any;
       const oldKioskMode = oldRow && oldRow.value === 'true' ? true : false;

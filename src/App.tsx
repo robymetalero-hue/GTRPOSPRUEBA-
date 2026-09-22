@@ -20,9 +20,10 @@ import AudioVoice from './components/AudioVoice';
 import OfflineStatusHUD from './components/OfflineStatusHUD';
 import OfflineManagerModal from './components/OfflineManagerModal';
 import PWAInstallModal from './components/PWAInstallModal';
+import { SupervisorUnlockModal } from './components/SupervisorUnlockModal';
 import { Menu, X, Home, ShoppingCart, Clock, Receipt, PackageSearch, 
     Folder, ClipboardCheck, Undo2, LayoutDashboard, TrendingUp, 
-    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu, Download, RefreshCw, Check, Zap, ShieldCheck
+    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu, Download, RefreshCw, Check, Zap, ShieldCheck, Maximize, Minimize, KeyRound
 } from 'lucide-react';
 
 const lazyWithRetries = (componentImport: () => Promise<any>) =>
@@ -279,12 +280,17 @@ function AppLayout() {
         isAutonomousTesting, setIsAutonomousTesting, autonomousStep, setAutonomousStep, autonomousLogs, setAutonomousLogs,
         products, pwaPrompt, installPWA, isPwaInstalled, isInitializing, kioskMode, theme, setTheme, syncError,
         isOfflineModalOpen, setIsOfflineModalOpen, isPwaInstallModalOpen, setIsPwaInstallModalOpen,
-        hasPwaUpdate, isUpdatingPwa, pwaUpdateStepMessage, pwaVersionInfo, checkForPwaUpdates, applyPwaUpdate, handlePwaPrimaryAction
+        hasPwaUpdate, isUpdatingPwa, pwaUpdateStepMessage, pwaVersionInfo, checkForPwaUpdates, applyPwaUpdate, handlePwaPrimaryAction,
+        isSupervisorUnlocked, setIsSupervisorUnlocked, supervisorInfo, relockKiosk, isFullscreen, toggleFullscreen, showNotification
     } = useAppContext();
     
     const isRgb = theme === 'rgb';
+    const [isSupervisorModalOpen, setIsSupervisorModalOpen] = useState(false);
     
-    const isKioskLocked = (kioskMode || (user && user.role === 'vendedor')) && user?.role !== 'admin' && user?.role !== 'propietario';
+    const isKioskLocked = !isSupervisorUnlocked 
+        && (kioskMode || (user && user.role === 'vendedor' && !user?.permissions?.view_inventory && !user?.permissions?.access_admin_panel)) 
+        && user?.role !== 'admin' 
+        && user?.role !== 'propietario';
     const lowStockCount = products ? products.filter(p => p.stock <= p.stock_alarm).length : 0;
     const [localWorkers, setLocalWorkers] = useState<any[]>([]);
     const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -778,6 +784,25 @@ function AppLayout() {
                             </div>
                         </div>
                     </div>
+                    {/* Header Kiosk Tools */}
+                    <div className="flex items-center gap-1.5">
+                        <button
+                            type="button"
+                            onClick={toggleFullscreen}
+                            className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700/80 flex items-center justify-center text-slate-600 dark:text-slate-300 transition cursor-pointer"
+                            title={isFullscreen ? "Salir de Pantalla Completa" : "Pantalla Completa Kiosco"}
+                        >
+                            {isFullscreen ? <Minimize size={14} /> : <Maximize size={14} />}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setIsSupervisorModalOpen(true)}
+                            className="w-8 h-8 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center transition cursor-pointer"
+                            title="Desbloqueo de Supervisor"
+                        >
+                            <ShieldCheck size={14} />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Theme Switcher */}
@@ -887,19 +912,29 @@ function AppLayout() {
                         <p className="text-xs font-black text-slate-805 dark:text-white truncate uppercase">{user?.username || 'Invitado'}</p>
                         <p className="text-[8.5px] font-extrabold text-amber-500 font-mono mt-0.5 uppercase tracking-wider">Cajero Kiosko</p>
                     </div>
-                    <button 
-                        onClick={() => {
-                            const confirmClose = window.confirm("¿Seguro que deseas salir del terminal de caja fiscal?");
-                            if (confirmClose) {
-                                setView('inicio');
-                                setUser(null);
-                            }
-                        }} 
-                        className="w-8 h-8 rounded-xl bg-rose-500/10 hover:bg-rose-500/15 border border-rose-500/15 flex items-center justify-center text-rose-500 cursor-pointer transition hover:scale-105"
-                        title="Salir del Sistema"
-                    >
-                        <LogOut size={13} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                        <button
+                            type="button"
+                            onClick={() => setIsSupervisorModalOpen(true)}
+                            className="w-8 h-8 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 flex items-center justify-center text-amber-600 dark:text-amber-400 cursor-pointer transition hover:scale-105"
+                            title="Desbloqueo de Supervisor"
+                        >
+                            <ShieldCheck size={14} />
+                        </button>
+                        <button 
+                            onClick={() => {
+                                const confirmClose = window.confirm("¿Seguro que deseas salir del terminal de caja fiscal?");
+                                if (confirmClose) {
+                                    setView('inicio');
+                                    setUser(null);
+                                }
+                            }} 
+                            className="w-8 h-8 rounded-xl bg-rose-500/10 hover:bg-rose-500/15 border border-rose-500/15 flex items-center justify-center text-rose-500 cursor-pointer transition hover:scale-105"
+                            title="Salir del Sistema"
+                        >
+                            <LogOut size={13} />
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1273,6 +1308,15 @@ function AppLayout() {
                             <span className="text-[9px] font-black uppercase tracking-wider">Conteo</span>
                         </button>
                         <button
+                            type="button"
+                            onClick={() => setIsSupervisorModalOpen(true)}
+                            className="flex flex-col items-center justify-center gap-1 flex-1 py-1 text-amber-500 hover:text-amber-600 cursor-pointer"
+                            title="Desbloqueo de Supervisor"
+                        >
+                            <ShieldCheck size={18} />
+                            <span className="text-[9px] font-black uppercase tracking-wider">Superv.</span>
+                        </button>
+                        <button
                             onClick={() => {
                                 const confirmClose = window.confirm("¿Seguro que deseas salir del terminal de caja fiscal?");
                                 if (confirmClose) {
@@ -1560,6 +1604,37 @@ function AppLayout() {
                 isOpen={isPwaInstallModalOpen}
                 onClose={() => setIsPwaInstallModalOpen(false)}
             />
+
+            {/* Kiosk Mode Temporary Supervisor Unlock Modal */}
+            <SupervisorUnlockModal
+                isOpen={isSupervisorModalOpen}
+                onClose={() => setIsSupervisorModalOpen(false)}
+                onSuccess={(sup) => {
+                    setIsSupervisorUnlocked(true);
+                    if (showNotification) {
+                        showNotification(`Terminal desbloqueada por supervisor ${sup.username} (${sup.role}).`, 'success');
+                    }
+                }}
+            />
+
+            {/* Persistent Supervisor Status Badge when temporarily unlocked */}
+            {isSupervisorUnlocked && (
+                <div className="fixed top-3 right-4 z-[90] flex items-center gap-2.5 bg-amber-500 text-slate-950 px-3.5 py-1.5 rounded-full shadow-2xl border border-amber-400 text-xs font-black animate-in fade-in slide-in-from-top-3 select-none">
+                    <ShieldCheck size={16} />
+                    <span>Supervisión: {supervisorInfo?.username || 'Activo'}</span>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            relockKiosk();
+                            if (showNotification) showNotification("Modo Kiosco rebloqueado.", "info");
+                        }}
+                        className="ml-1 px-2.5 py-0.5 bg-slate-950 hover:bg-slate-800 text-white rounded-full text-[10px] font-bold uppercase transition cursor-pointer"
+                        title="Rebloquear Kiosco inmediatamente"
+                    >
+                        Bloquear
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

@@ -9,7 +9,7 @@ import {
     AlertTriangle, CreditCard, DollarSign, Camera, X, ClipboardCheck,
     Coins, HelpCircle, ChevronRight, ChevronDown, ShoppingBag, Grid, List, LayoutGrid,
     CheckCircle2, ArrowLeftRight, QrCode, History, Eye, Star, FileText, Sparkles, Download, Check, Clock, Truck, Lock, Loader2,
-    RotateCcw, ShieldAlert, Maximize2, Package
+    RotateCcw, ShieldAlert, Maximize2, Package, Maximize, Minimize
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import BarcodeScannerModal from '../components/BarcodeScannerModal';
@@ -251,13 +251,17 @@ export default function POS() {
         discount, setDiscount, discountType, setDiscountType,
         paymentMethod, setPaymentMethod, departments, fetchDepartments,
         hasMoreProducts, loadMoreProducts,
-        deductLocalProductStock, registerLocalClient
+        deductLocalProductStock, registerLocalClient,
+        isSupervisorUnlocked, isFullscreen, toggleFullscreen
     } = useAppContext();
 
     const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
     const [visibleCatalogLimit, setVisibleCatalogLimit] = useState(48);
     const executeCheckoutRef = useRef<any>(null);
-    const isKioskLocked = (kioskMode || (user && user.role === 'vendedor')) && user?.role !== 'admin' && user?.role !== 'propietario';
+    const isKioskLocked = !isSupervisorUnlocked 
+        && (kioskMode || (user && user.role === 'vendedor' && !user?.permissions?.view_inventory && !user?.permissions?.access_admin_panel)) 
+        && user?.role !== 'admin' 
+        && user?.role !== 'propietario';
 
 
     const catalogScroll = useElasticScroll(true);
@@ -2862,6 +2866,17 @@ export default function POS() {
                                 <Camera size={15} />
                                 <span className="hidden sm:inline font-bold">Scanner</span>
                             </button>
+                            {isKioskLocked && (
+                                <button
+                                    type="button"
+                                    onClick={toggleFullscreen}
+                                    className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl sm:rounded-2xl flex items-center gap-1.5 font-bold text-xs transition duration-200 hover:scale-[1.01] active:scale-95 whitespace-nowrap cursor-pointer shadow-sm h-10 shrink-0"
+                                    title={isFullscreen ? "Salir de Pantalla Completa" : "Activar Pantalla Completa Kiosco"}
+                                >
+                                    {isFullscreen ? <Minimize size={15} /> : <Maximize size={15} />}
+                                    <span className="hidden sm:inline font-bold">{isFullscreen ? "Ventana" : "Kiosco"}</span>
+                                </button>
+                            )}
                         </div>
                         
                         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full 2xl:w-7/12 justify-between 2xl:justify-end min-w-0">
