@@ -1,5 +1,5 @@
 import { safeDispatchEvent } from "../utils/events";
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { User, CartItem, Product, Client, ReceiptTemplate, Department, SaleTab, RgbThemeSettings } from '../types';
 import { normalizePermissions } from '../utils/permissions';
 import { initializeApp, getApps, getApp } from 'firebase/app';
@@ -208,6 +208,22 @@ interface AppContextType {
     showNotification?: (message: string, type?: 'success' | 'error' | 'warn' | 'info') => void;
 }
 
+/**
+ * Fail-safe wrapper around localStorage.setItem.
+ * Prevents QuotaExceededError or DOMException from breaking application execution
+ * when storing large payloads (e.g. products catalogue). Large datasets are safely
+ * preserved in IndexedDB via cacheAppState.
+ */
+export function safeLocalStorageSetItem(key: string, value: string): boolean {
+    try {
+        localStorage.setItem(key, value);
+        return true;
+    } catch (e: any) {
+        console.warn(`[Storage Warning] localStorage quota exceeded or restricted for key "${key}". Relying on IndexedDB storage.`, e?.message || e);
+        return false;
+    }
+}
+
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -223,6 +239,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [kioskMode, setKioskMode] = useState(() => localStorage.getItem('kioskMode') === 'true');
     const [isOffline, setIsOffline] = useState(() => !window.navigator.onLine);
     const [isSyncing, setIsSyncing] = useState(false);
+    const syncRunningRef = useRef(false);
     const [syncError, setSyncError] = useState<string | null>(null);
 
     // Offline & Sync Engine States
@@ -563,6 +580,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!user) return;
 
         const syncUserSession = async () => {
+            // Guard: Avoid wasteful continuous network errors when the client is disconnected
+            if (navigator.onLine === false) return;
+
             try {
                 const authToken = localStorage.getItem('auth_token');
                 const res = await fetch('/api/auth/me', {
@@ -1226,7 +1246,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setProducts(data.products);
                 setTotalProducts(data.total);
                 setHasMoreProducts(data.has_more);
-                localStorage.setItem('cached_products', JSON.stringify(data.products));
+                safeLocalStorageSetItem('cached_products', JSON.stringify(data.products));
                 cacheAppState('cached_products', data.products);
                 setCachedMinimalProducts(data.products).catch(() => {});
             } else {
@@ -1234,7 +1254,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setProducts(arr);
                 setTotalProducts(arr.length);
                 setHasMoreProducts(false);
-                localStorage.setItem('cached_products', JSON.stringify(arr));
+                safeLocalStorageSetItem('cached_products', JSON.stringify(arr));
                 cacheAppState('cached_products', arr);
                 setCachedMinimalProducts(arr).catch(() => {});
             }
@@ -1278,7 +1298,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     const newItems = data.products.filter((p: any) => !existingIds.has(p.id));
                     const merged = [...prev, ...newItems];
                     // Save merged set in cache to prevent offline gaps
-                    localStorage.setItem('cached_products', JSON.stringify(merged));
+                    safeLocalStorageSetItem('cached_products', JSON.stringify(merged));
                     cacheAppState('cached_products', merged);
                     return merged;
                 });
@@ -1554,10 +1574,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     });
                     const processedPayload = JSON.parse(payloadStr);
 
-                    // Execute fetch call
+                    // Execute fetch call with authorization and user context
+                    const authToken = localStorage.getItem('auth_token');
+                    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+                    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+                    if (user) {
+                        headers['x-user-id'] = String(user.id);
+                        headers['x-user-role'] = user.role || '';
+                        headers['x-user-username'] = user.username || '';
+                    }
+
                     const res = await fetch(action.url, {
                         method: action.method,
-                        headers: { 'Content-Type': 'application/json' },
+                        headers,
                         body: JSON.stringify(processedPayload)
                     });
 
@@ -1574,9 +1603,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         successCount++;
                     } else {
                         const errText = await res.text();
-                        console.error(`[Offline Sync] Server rejected action ${action.id}:`, errText);
-                        // Delete if it's a structural client-side error (4xx) so we don't block the queue
-                        if (res.status >= 400 && res.status < 500) {
+                        console.error(`[Offline Sync] Server rejected action ${action.id} (Status ${res.status}):`, errText);
+                        
+                        // CRITICAL: NEVER delete actions on 401 (Unauthorized) or 403 (Forbidden)
+                        // If token expired or session is refreshing, preserve them so user work is never lost.
+                        if (res.status === 401 || res.status === 403) {
+                            console.warn(`[Offline Sync] Preserving action ${action.id} in queue until session is revalidated.`);
+                            break; // Stop loop until user re-authenticates
+                        } else if (res.status === 400 || res.status === 404 || res.status === 422) {
+                            // Definitive client-side validation errors can be pruned to prevent queue poison
                             await deleteOfflineAction(action.id);
                         }
                     }
@@ -1623,9 +1658,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     // 1. If we have a client name but no client_id, let's try to register/find the client first
                     if (sale.clientName && sale.clientName.trim() && !clientId) {
                         try {
+                            const authToken = localStorage.getItem('auth_token');
+                            const clientHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+                            if (authToken) clientHeaders['Authorization'] = `Bearer ${authToken}`;
+                            if (user) {
+                                clientHeaders['x-user-id'] = String(user.id);
+                                clientHeaders['x-user-role'] = user.role || '';
+                                clientHeaders['x-user-username'] = user.username || '';
+                            }
+
                             const clientRes = await fetch('/api/clients', {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: clientHeaders,
                                 body: JSON.stringify({ name: sale.clientName, phone: sale.clientPhone })
                             });
                             if (clientRes.ok) {
@@ -1687,9 +1731,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     };
 
-    const triggerOnlineSync = async () => {
+    const triggerOnlineSync = async (forceFull = false) => {
         if (navigator.onLine === false) return;
+        if (syncRunningRef.current) return;
+        syncRunningRef.current = true;
         setIsSyncing(true);
+
+        const safetyTimer = setTimeout(() => {
+            setIsSyncing(false);
+            syncRunningRef.current = false;
+        }, 3500);
+
         try {
             const tempIdMapping: { [key: string]: any } = {};
             // First synchronize general actions, then sales with shared mapping
@@ -1702,15 +1754,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (token) {
                 headers['Authorization'] = `Bearer ${token}`;
             }
-            const res = await fetch('/api/sync/trigger', { method: 'POST', headers });
+            const res = await fetch('/api/sync/trigger', { 
+                method: 'POST', 
+                headers,
+                body: JSON.stringify({ full: forceFull })
+            });
             if (res.ok) {
                 const data = await res.json();
                 console.log("[PWA Sync] Sync completed successfully:", data.status);
-                // Force load latest data after bidirectional sync
-                await fetchProducts();
-                await fetchClients();
-                await fetchExchangeRate();
-                await fetchDepartments();
+                // Concurrently fetch latest data in parallel
+                await Promise.allSettled([
+                    fetchProducts(),
+                    fetchClients(),
+                    fetchExchangeRate(),
+                    fetchDepartments()
+                ]);
                 setSyncError(null);
             } else {
                 const errData = await res.json().catch(() => ({}));
@@ -1722,10 +1780,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             console.warn("[PWA Sync] Error triggering backend online synchronization:", error);
             setSyncError(error?.message || String(error));
         } finally {
-            // Keep the spinner visible/smooth for a short period of satisfaction
+            clearTimeout(safetyTimer);
             setTimeout(() => {
                 setIsSyncing(false);
-            }, 1200);
+                syncRunningRef.current = false;
+            }, 600);
         }
     };
 
@@ -1737,13 +1796,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/alerts`;
         
-        let socket = null;
-        let reconnectTimeout = null;
+        let socket: any = null;
+        let reconnectTimeout: any = null;
 
         const connect = () => {
             socket = new WebSocket(wsUrl);
 
-            socket.onmessage = (event) => {
+            socket.onmessage = (event: any) => {
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'kiosk_mode_changed') {
@@ -1757,6 +1816,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                                 type: 'info'
                             }
                         });
+                    } else if (data.type === 'exchange_rate_updated' && data.new_rate) {
+                        const newRateNum = Number(data.new_rate);
+                        if (!isNaN(newRateNum) && newRateNum > 0) {
+                            console.log(`[PWA Socket] Live exchange rate update received: $1 = ${newRateNum} Bs.`);
+                            setExchangeRate(newRateNum);
+                            localStorage.setItem('cached_exchange_rate', String(newRateNum));
+                            safeDispatchEvent('exchange_rate_updated', { detail: newRateNum });
+                        }
                     }
                 } catch (err) { }
             };
@@ -1818,7 +1885,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 3500);
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
             const startTime = performance.now();
 
             try {
@@ -1837,7 +1904,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         setNetworkQuality(quality);
                         if (isOffline) {
                             setIsOffline(false);
-                            triggerOnlineSync();
                         }
                     } else {
                         setNetworkQuality('unstable');

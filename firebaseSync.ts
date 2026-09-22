@@ -427,6 +427,9 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
             cleanData[key] = val;
           }
         }
+        if (isSettings && !cleanData.updated_at) {
+          cleanData.updated_at = new Date().toISOString();
+        }
 
         // Validate payload & compute transaction hash
         let enrichedData = cleanData;
@@ -501,6 +504,9 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
         if (val !== undefined) {
           cleanData[key] = val;
         }
+      }
+      if (tableName === 'settings' && !cleanData.updated_at) {
+        cleanData.updated_at = new Date().toISOString();
       }
 
       let enrichedData = cleanData;
@@ -751,18 +757,36 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
 
             if (table === 'settings' && docId === 'exchange_rate' && !forceOverwrite) {
               try {
-                const localRate = db.prepare("SELECT value FROM settings WHERE key = 'exchange_rate'").get() as any;
-                if (localRate && localRate.value) {
-                  const lastAudit = db.prepare("SELECT changed_at FROM exchange_rate_audit ORDER BY id DESC LIMIT 1").get() as any;
-                  if (lastAudit && lastAudit.changed_at && data.updated_at) {
-                    const localTime = new Date(lastAudit.changed_at).getTime();
-                    const remoteTime = new Date(data.updated_at).getTime();
-                    if (!isNaN(localTime) && !isNaN(remoteTime) && localTime > remoteTime) {
-                      continue;
-                    }
+                const localRateRow = db.prepare("SELECT value, updated_at FROM settings WHERE key = 'exchange_rate'").get() as any;
+                const lastAudit = db.prepare("SELECT changed_at, new_rate FROM exchange_rate_audit ORDER BY id DESC LIMIT 1").get() as any;
+                
+                const remoteVal = parseFloat(data.value);
+                const localVal = parseFloat(localRateRow?.value || (lastAudit?.new_rate ? String(lastAudit.new_rate) : ''));
+
+                // Shield 1: If incoming remote rate is 6.96 or invalid, but local has a valid audited custom rate (e.g. 13, 8.5, etc.),
+                // NEVER let the remote default 6.96 stomp on the user's custom rate!
+                if (!isNaN(remoteVal) && remoteVal === 6.96 && !isNaN(localVal) && localVal > 0 && localVal !== 6.96) {
+                  console.log(`[Sync ExchangeRate Shield] Retaining local custom exchange rate of ${localVal} Bs. over remote default 6.96.`);
+                  continue;
+                }
+
+                // Shield 2: Timestamp comparison using lastAudit.changed_at, settings.updated_at, remote updated_at or _tx_timestamp
+                const localTimestamp = (lastAudit && lastAudit.changed_at) 
+                  ? lastAudit.changed_at 
+                  : (localRateRow ? localRateRow.updated_at : null);
+                const remoteTimestamp = data.updated_at || data._tx_timestamp || null;
+
+                if (localTimestamp && remoteTimestamp) {
+                  const localTime = new Date(localTimestamp).getTime();
+                  const remoteTime = new Date(remoteTimestamp).getTime();
+                  if (!isNaN(localTime) && !isNaN(remoteTime) && localTime >= remoteTime) {
+                    console.log(`[Sync ExchangeRate Shield] Local rate timestamp (${localTimestamp}) is newer or equal to remote (${remoteTimestamp}). Keeping local.`);
+                    continue;
                   }
                 }
-              } catch (e: any) {}
+              } catch (e: any) {
+                console.warn('[Sync ExchangeRate Shield] Warning checking rate timestamps:', e.message);
+              }
             }
 
             let keys = Object.keys(data);

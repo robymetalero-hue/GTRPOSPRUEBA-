@@ -40,6 +40,27 @@ db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.pragma('temp_store = MEMORY');
 db.pragma('cache_size = -16000'); // 16MB cache allocation
+db.pragma('wal_autocheckpoint = 1000');
+
+// Initial WAL flush on startup
+try {
+  db.pragma('wal_checkpoint(PASSIVE)');
+} catch (chkErr: any) {
+  console.warn('[SQLite Maintenance] Initial WAL checkpoint note:', chkErr.message);
+}
+
+// Scheduled passive WAL maintenance every 10 minutes to prevent unbound .db-wal file growth
+const walMaintenanceInterval = setInterval(() => {
+  try {
+    db.pragma('wal_checkpoint(PASSIVE)');
+  } catch (err: any) {
+    console.warn('[SQLite Maintenance] Periodic wal_checkpoint error:', err.message);
+  }
+}, 10 * 60 * 1000);
+
+if (typeof walMaintenanceInterval.unref === 'function') {
+  walMaintenanceInterval.unref();
+}
 
 // Initialization
 db.exec(`
@@ -116,7 +137,8 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
-    value TEXT
+    value TEXT,
+    updated_at TEXT
   );
 
   CREATE TABLE IF NOT EXISTS exchange_rate_audit (
@@ -337,6 +359,10 @@ try {
 
 try {
   db.exec("ALTER TABLE sales ADD COLUMN cierre_id INTEGER DEFAULT NULL");
+} catch (e: any) {}
+
+try {
+  db.exec("ALTER TABLE settings ADD COLUMN updated_at TEXT;");
 } catch (e: any) {}
 
 try {
@@ -667,9 +693,13 @@ try {
 
 // Seed exchange rate default
 try {
-  const hasRate = db.prepare('SELECT value FROM settings WHERE key = ?').get('exchange_rate');
-  if (!hasRate) {
-    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('exchange_rate', '6.96');
+  const hasRate = db.prepare('SELECT value FROM settings WHERE key = ?').get('exchange_rate') as any;
+  if (!hasRate || !hasRate.value) {
+    const latestAudit = db.prepare('SELECT new_rate FROM exchange_rate_audit ORDER BY id DESC LIMIT 1').get() as any;
+    const initialRate = (latestAudit && latestAudit.new_rate && !isNaN(parseFloat(latestAudit.new_rate)))
+      ? String(latestAudit.new_rate)
+      : '6.96';
+    db.prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('exchange_rate', initialRate, getBoliviaISOString());
   }
 } catch (e) {}
 

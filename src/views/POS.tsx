@@ -2808,8 +2808,10 @@ export default function POS() {
                         
                         {/* Actions Row: Offline Status, Ver Última Venta & Live Exchange Rate */}
                         <div className="flex items-center justify-between md:justify-end gap-2 shrink-0">
-                            {/* Intelligent Offline HUD */}
-                            <OfflineStatusHUD variant="compact" />
+                            {/* Intelligent Offline HUD (Only visible on large screens to avoid duplicate HUD on mobile top bar) */}
+                            <div className="hidden lg:block">
+                                <OfflineStatusHUD variant="compact" />
+                            </div>
 
                             {/* Botón Ver Última Venta */}
                             <motion.button

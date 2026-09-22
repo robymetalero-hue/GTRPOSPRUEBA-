@@ -117,6 +117,24 @@ function listFilesRecursively(dir: string, baseDir: string = dir): string[] {
 
 const JWT_SECRET = getJwtSecret(db);
 
+export function getSystemExchangeRate(): number {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'exchange_rate'").get() as any;
+    if (row && row.value && !isNaN(parseFloat(row.value)) && parseFloat(row.value) > 0) {
+      return parseFloat(row.value);
+    }
+    const auditRow = db.prepare("SELECT new_rate FROM exchange_rate_audit ORDER BY id DESC LIMIT 1").get() as any;
+    if (auditRow && auditRow.new_rate && !isNaN(parseFloat(auditRow.new_rate)) && parseFloat(auditRow.new_rate) > 0) {
+      const val = parseFloat(auditRow.new_rate);
+      try {
+        db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('exchange_rate', ?, ?)").run(String(val), getBoliviaISOString());
+      } catch (_) {}
+      return val;
+    }
+  } catch (e) {}
+  return 6.96;
+}
+
 async function startServer() {
   const app = express();
 
@@ -5551,14 +5569,21 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     if (isBackSyncing) {
       return res.json({ status: "already_syncing", lastSyncTime });
     }
+    const isFullSync = Boolean(req.body && req.body.full);
     isBackSyncing = true;
     try {
-      console.log("[PWA API Sync] Triggering safe bidirectional sync (pull first, reconcile ledger, then push)...");
-      await pullFirestoreToLocal();
-      reconcileCatalogStockWithLedger();
-      await pushAllLocalToFirestore();
+      if (isFullSync) {
+        console.log("[PWA API Sync] Explicit full bidirectional sync requested...");
+        await pullFirestoreToLocal();
+        reconcileCatalogStockWithLedger();
+        await pushAllLocalToFirestore();
+      } else {
+        // Routine fast online sync: Push locally updated tables to cloud in non-blocking fashion
+        console.log("[PWA API Sync] Routine fast online sync triggered...");
+        syncAfterWrite(['sales', 'sale_items', 'caja_cierres', 'shifts', 'settings', 'exchange_rate_audit', 'system_audit_logs']);
+      }
       lastSyncTime = new Date().toISOString();
-      res.json({ status: "success", lastSyncTime });
+      res.json({ status: "success", lastSyncTime, mode: isFullSync ? "full" : "fast" });
     } catch (e: any) {
       console.error("[PWA API Sync] Error syncing:", e.message);
       res.status(500).json({ status: "error", error: e.message, lastSyncTime });
@@ -7004,27 +7029,7 @@ DIRECTIVAS CRÍTICAS:
   // REST API: Exchange Rate Configuration
   app.get("/api/settings/exchange-rate", async (req, res) => {
     try {
-      let row = db.prepare('SELECT value FROM settings WHERE key = ?').get('exchange_rate') as any;
-      // If SQLite has no rate record, query Firestore to initialize
-      if (!row && firestore) {
-        try {
-          const docRef = doc(firestore, 'settings', 'exchange_rate');
-          const snap = await getDoc(docRef);
-          if (snap.exists()) {
-            const data = snap.data();
-            if (data && data.value && !isNaN(parseFloat(data.value)) && parseFloat(data.value) > 0) {
-              const fsRate = String(data.value);
-              db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('exchange_rate', fsRate);
-              row = { value: fsRate };
-            }
-          }
-        } catch (fsErr: any) {
-          // Gracefully continue with local default if Firestore is temporarily offline
-        }
-      }
-      const rate = (row && row.value && !isNaN(parseFloat(row.value)) && parseFloat(row.value) > 0) 
-        ? parseFloat(row.value) 
-        : 6.96;
+      const rate = getSystemExchangeRate();
       res.json({ exchange_rate: rate });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -7045,17 +7050,17 @@ DIRECTIVAS CRÍTICAS:
       return res.status(400).json({ error: "Tipo de cambio inválido. Debe ser un número mayor a cero." });
     }
     try {
-      const oldRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('exchange_rate') as any;
-      const oldRate = oldRow ? parseFloat(oldRow.value) : 6.96;
+      const oldRate = getSystemExchangeRate();
       
       const userId = effectiveUser.id || 1;
       const userName = effectiveUser.username || 'admin';
       const role = effectiveUser.role || 'admin';
+      const nowIso = getBoliviaISOString();
 
       const transaction = db.transaction(() => {
-        db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('exchange_rate', String(numRate));
-        db.prepare('INSERT INTO exchange_rate_audit (user_id, username, old_rate, new_rate) VALUES (?, ?, ?, ?)')
-          .run(userId, userName, oldRate, numRate);
+        db.prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('exchange_rate', String(numRate), nowIso);
+        db.prepare('INSERT INTO exchange_rate_audit (user_id, username, old_rate, new_rate, changed_at) VALUES (?, ?, ?, ?, ?)')
+          .run(userId, userName, oldRate, numRate, nowIso);
       });
       transaction();
 
@@ -7066,7 +7071,7 @@ DIRECTIVAS CRÍTICAS:
             'settings',
             'exchange_rate',
             'CREATE',
-            { key: 'exchange_rate', value: String(numRate), updated_at: new Date().toISOString() },
+            { key: 'exchange_rate', value: String(numRate), updated_at: nowIso },
             {
               userId: userId,
               userName: userName,
@@ -7102,6 +7107,14 @@ DIRECTIVAS CRÍTICAS:
       } catch (auditErr: any) {
         console.warn("[Audit Error] Failed to log exchange rate change:", auditErr.message);
       }
+
+      // Real-time broadcast to all connected WebSocket clients across terminals
+      try {
+        const payload = JSON.stringify({ type: 'exchange_rate_updated', new_rate: numRate, old_rate: oldRate });
+        connectedAlertClients.forEach(client => {
+          if (client.readyState === 1) client.send(payload);
+        });
+      } catch (_) {}
 
       syncAfterWrite(["settings", "exchange_rate_audit", "system_audit_logs"]);
       res.json({ success: true, old_rate: oldRate, new_rate: numRate });
