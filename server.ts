@@ -119,17 +119,24 @@ const JWT_SECRET = getJwtSecret(db);
 
 export function getSystemExchangeRate(): number {
   try {
-    const row = db.prepare("SELECT value FROM settings WHERE key = 'exchange_rate'").get() as any;
-    if (row && row.value && !isNaN(parseFloat(row.value)) && parseFloat(row.value) > 0) {
-      return parseFloat(row.value);
-    }
+    // 1. Authoritative check: The latest record in exchange_rate_audit represents explicit user action
     const auditRow = db.prepare("SELECT new_rate FROM exchange_rate_audit ORDER BY id DESC LIMIT 1").get() as any;
     if (auditRow && auditRow.new_rate && !isNaN(parseFloat(auditRow.new_rate)) && parseFloat(auditRow.new_rate) > 0) {
       const val = parseFloat(auditRow.new_rate);
+      // Ensure settings table matches the audit trail
       try {
-        db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('exchange_rate', ?, ?)").run(String(val), getBoliviaISOString());
+        const cur = db.prepare("SELECT value FROM settings WHERE key = 'exchange_rate'").get() as any;
+        if (!cur || parseFloat(cur.value) !== val) {
+          db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('exchange_rate', ?, ?)").run(String(val), getBoliviaISOString());
+        }
       } catch (_) {}
       return val;
+    }
+
+    // 2. Fallback to settings table
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'exchange_rate'").get() as any;
+    if (row && row.value && !isNaN(parseFloat(row.value)) && parseFloat(row.value) > 0) {
+      return parseFloat(row.value);
     }
   } catch (e) {}
   return 6.96;

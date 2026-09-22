@@ -506,17 +506,17 @@ export const OfflineManagerModal: React.FC<OfflineManagerModalProps> = ({ isOpen
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 bg-black/60 backdrop-blur-xs select-none">
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 md:p-6 bg-black/60 backdrop-blur-xs">
                 <motion.div
                     initial={{ opacity: 0, scale: 0.96, y: 10 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.96, y: 10 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 30 }}
                     id="offline-manager-modal-container"
-                    className="relative w-full max-w-4xl h-[95vh] sm:h-auto sm:max-h-[90vh] flex flex-col bg-white dark:bg-[#0c111e] rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
+                    className="relative w-full h-[100dvh] sm:h-[88vh] sm:max-h-[88vh] sm:max-w-4xl flex flex-col bg-white dark:bg-[#0c111e] sm:rounded-2xl border-0 sm:border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
                 >
                     {/* Modal Fixed Header */}
-                    <div className="flex items-center justify-between px-3 sm:px-6 py-3 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/80 dark:bg-[#080d1a] shrink-0">
+                    <div className="flex items-center justify-between px-3 sm:px-6 py-2.5 sm:py-3 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/90 dark:bg-[#080d1a] shrink-0">
                         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
                             <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shrink-0 ${
                                 isOffline 
@@ -526,7 +526,7 @@ export const OfflineManagerModal: React.FC<OfflineManagerModalProps> = ({ isOpen
                                 {isOffline ? <WifiOff size={18} className="animate-pulse" /> : <Wifi size={18} />}
                             </div>
                             <div className="min-w-0">
-                                <h2 className="text-sm sm:text-base font-black text-slate-900 dark:text-white leading-tight truncate">
+                                <h2 className="text-xs sm:text-base font-black text-slate-900 dark:text-white leading-tight truncate">
                                     Centro de Control Modo Offline
                                 </h2>
                                 <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
@@ -555,211 +555,254 @@ export const OfflineManagerModal: React.FC<OfflineManagerModalProps> = ({ isOpen
                             <button
                                 type="button"
                                 onClick={onClose}
-                                className="p-1.5 sm:p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                                className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                                 title="Cerrar ventana"
                             >
-                                <X size={18} />
+                                <X size={20} />
                             </button>
                         </div>
                     </div>
 
-                    {/* UNIFIED SCROLLABLE BODY (Fixes lack of scrolling and maximizes utility) */}
-                    <div className="flex-1 overflow-y-auto overscroll-contain touch-pan-y divide-y divide-slate-100 dark:divide-slate-800/80 scrollbar-thin">
-                        
-                        {/* Interactive KPI & Metrics Strip (Compact 2x2 grid on mobile) */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 p-2.5 sm:p-4 bg-slate-50/60 dark:bg-black/20 text-xs">
-                            {/* Card 1: Red y Latencia */}
-                            <div 
-                                onClick={handleManualPing}
-                                className="flex flex-col justify-between p-2.5 sm:p-3 rounded-xl bg-white dark:bg-[#070b13] border border-slate-200/80 dark:border-slate-800 hover:border-indigo-400 active:scale-98 transition cursor-pointer select-none shadow-2xs"
-                                title="Toca para probar latencia con el servidor"
-                            >
-                                <div className="flex items-center justify-between">
-                                    <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Red & Ping</span>
-                                    <span className={`w-2 h-2 rounded-full ${isOffline ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
-                                </div>
-                                <span className="font-extrabold text-xs text-slate-800 dark:text-white mt-1 truncate">
-                                    {isOffline ? 'Local Autónomo' : 'Conectado'}
-                                </span>
-                                <div className="flex items-center justify-between mt-1 text-[10px] text-slate-400">
-                                    <span className="truncate">
-                                        {networkLatency !== null && !isOffline ? `${networkLatency} ms` : (isPinging ? 'Pinging...' : 'Probar ping')}
-                                    </span>
-                                    <RefreshCw size={10} className={isPinging ? "animate-spin text-indigo-500 shrink-0" : "text-slate-400 shrink-0"} />
-                                </div>
-                            </div>
+                    {/* Fixed Top Status Section */}
+                    {/* Mobile: Compact 1-line horizontal status pills (avoids vertical screen congestion) */}
+                    <div className="flex sm:hidden items-center gap-2 px-3 py-2 bg-slate-50/80 dark:bg-black/30 border-b border-slate-100 dark:border-slate-800/60 overflow-x-auto scrollbar-none shrink-0 text-[10.5px]">
+                        <div 
+                            onClick={handleManualPing}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-[#070b13] border border-slate-200/80 dark:border-slate-800 shrink-0 cursor-pointer"
+                        >
+                            <span className={`w-2 h-2 rounded-full ${isOffline ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+                            <span className="font-bold text-slate-700 dark:text-slate-300">{isOffline ? 'Offline' : 'Online'}</span>
+                            <span className="text-slate-400 text-[9.5px]">({networkLatency !== null ? `${networkLatency}ms` : 'Ping'})</span>
+                        </div>
 
-                            {/* Card 2: Ventas en Cola Local */}
-                            <div 
-                                onClick={() => setActiveTab('sales')}
-                                className={`flex flex-col justify-between p-2.5 sm:p-3 rounded-xl bg-white dark:bg-[#070b13] border active:scale-98 transition cursor-pointer select-none shadow-2xs ${
-                                    activeTab === 'sales' ? 'border-indigo-500 ring-1 ring-indigo-500/20 shadow-xs' : 'border-slate-200/80 dark:border-slate-800 hover:border-indigo-400'
-                                }`}
-                                title="Toca para ver la cola de ventas locales"
-                            >
-                                <div className="flex items-center justify-between">
-                                    <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Cola Local</span>
-                                    <ShoppingBag size={12} className="text-indigo-500 shrink-0" />
-                                </div>
-                                <span className="text-sm sm:text-base font-black text-indigo-600 dark:text-indigo-400 mt-0.5">
-                                    {stats.salesCount} <span className="text-[10px] font-medium text-slate-400">tickets</span>
-                                </span>
-                                <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400 truncate">
-                                    Total: {stats.totalAmountBob.toFixed(2)} Bs
-                                </span>
-                            </div>
+                        <div 
+                            onClick={() => setActiveTab('sales')}
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-[#070b13] border shrink-0 cursor-pointer ${
+                                activeTab === 'sales' ? 'border-indigo-500 text-indigo-600' : 'border-slate-200/80 dark:border-slate-800 text-slate-600 dark:text-slate-400'
+                            }`}
+                        >
+                            <ShoppingBag size={11} className="text-indigo-500" />
+                            <span className="font-black text-indigo-600 dark:text-indigo-400">{stats.salesCount}</span>
+                            <span className="text-slate-400 text-[9.5px]">tickets</span>
+                        </div>
 
-                            {/* Card 3: Bandeja de Contingencia */}
-                            <div 
-                                onClick={() => setActiveTab('server_approvals')}
-                                className={`flex flex-col justify-between p-2.5 sm:p-3 rounded-xl bg-white dark:bg-[#070b13] border active:scale-98 transition cursor-pointer select-none shadow-2xs ${
-                                    activeTab === 'server_approvals' ? 'border-indigo-500 ring-1 ring-indigo-500/20 shadow-xs' : 'border-slate-200/80 dark:border-slate-800 hover:border-indigo-400'
-                                }`}
-                                title="Toca para ver la bandeja de autorización de contingencia"
-                            >
-                                <div className="flex items-center justify-between">
-                                    <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Cuarentena</span>
-                                    <ShieldAlert size={12} className={serverSales.length > 0 ? "text-amber-500 animate-pulse shrink-0" : "text-slate-400 shrink-0"} />
-                                </div>
-                                <span className={`text-sm sm:text-base font-black mt-0.5 ${serverSales.length > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-700 dark:text-slate-300'}`}>
-                                    {serverSales.length} <span className="text-[10px] font-medium text-slate-400">en espera</span>
-                                </span>
-                                <span className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                                    {serverSales.length > 0 ? 'Requiere admin' : 'Bandeja al día'}
-                                </span>
-                            </div>
+                        <div 
+                            onClick={() => setActiveTab('server_approvals')}
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-[#070b13] border shrink-0 cursor-pointer ${
+                                activeTab === 'server_approvals' ? 'border-indigo-500' : 'border-slate-200/80 dark:border-slate-800'
+                            }`}
+                        >
+                            <ShieldAlert size={11} className={serverSales.length > 0 ? "text-amber-500" : "text-slate-400"} />
+                            <span className={`font-black ${serverSales.length > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-600 dark:text-slate-400'}`}>{serverSales.length}</span>
+                            <span className="text-slate-400 text-[9.5px]">cuarentena</span>
+                        </div>
 
-                            {/* Card 4: Persistencia y Respaldo */}
-                            <div 
-                                onClick={() => setActiveTab('backup')}
-                                className={`flex flex-col justify-between p-2.5 sm:p-3 rounded-xl bg-white dark:bg-[#070b13] border active:scale-98 transition cursor-pointer select-none shadow-2xs ${
-                                    activeTab === 'backup' ? 'border-indigo-500 ring-1 ring-indigo-500/20 shadow-xs' : 'border-slate-200/80 dark:border-slate-800 hover:border-indigo-400'
-                                }`}
-                                title="Toca para opciones de respaldo y descarga JSON"
-                            >
-                                <div className="flex items-center justify-between">
-                                    <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Persistencia</span>
-                                    <Database size={12} className="text-emerald-500 shrink-0" />
-                                </div>
-                                <span className="font-extrabold text-[11px] sm:text-xs text-emerald-600 dark:text-emerald-400 mt-1 truncate">
-                                    IndexedDB Activo
+                        <div 
+                            onClick={() => setActiveTab('backup')}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-[#070b13] border border-slate-200/80 dark:border-slate-800 shrink-0 cursor-pointer"
+                        >
+                            <Database size={11} className="text-emerald-500" />
+                            <span className="text-emerald-600 dark:text-emerald-400 font-bold">IndexedDB</span>
+                        </div>
+                    </div>
+
+                    {/* Desktop: 4 KPI Cards */}
+                    <div className="hidden sm:grid sm:grid-cols-4 gap-2.5 p-3 sm:px-6 sm:py-3 bg-slate-50/60 dark:bg-black/20 text-xs shrink-0 border-b border-slate-100 dark:border-slate-800/80">
+                        {/* Card 1: Red y Latencia */}
+                        <div 
+                            onClick={handleManualPing}
+                            className="flex flex-col justify-between p-2.5 rounded-xl bg-white dark:bg-[#070b13] border border-slate-200/80 dark:border-slate-800 hover:border-indigo-400 active:scale-98 transition cursor-pointer select-none shadow-2xs"
+                            title="Toca para probar latencia con el servidor"
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Red & Ping</span>
+                                <span className={`w-2 h-2 rounded-full ${isOffline ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+                            </div>
+                            <span className="font-extrabold text-xs text-slate-800 dark:text-white mt-1 truncate">
+                                {isOffline ? 'Local Autónomo' : 'Conectado'}
+                            </span>
+                            <div className="flex items-center justify-between mt-1 text-[10px] text-slate-400">
+                                <span className="truncate">
+                                    {networkLatency !== null && !isOffline ? `${networkLatency} ms` : (isPinging ? 'Pinging...' : 'Probar ping')}
                                 </span>
-                                <div className="flex items-center justify-between mt-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">
-                                    <span>Respaldo JSON</span>
-                                    <Download size={10} className="shrink-0" />
-                                </div>
+                                <RefreshCw size={10} className={isPinging ? "animate-spin text-indigo-500 shrink-0" : "text-slate-400 shrink-0"} />
                             </div>
                         </div>
 
-                        {/* Sticky Navigation Tabs Bar */}
-                        <div className="sticky top-0 z-20 flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-1.5 bg-white/95 dark:bg-[#0c111e]/95 backdrop-blur-md border-b border-slate-200/90 dark:border-slate-800 overflow-x-auto scrollbar-none shadow-xs">
-                            <button
-                                type="button"
-                                onClick={() => setActiveTab('server_approvals')}
-                                className={`py-2 px-3 text-[11px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                                    activeTab === 'server_approvals'
-                                        ? 'bg-indigo-600 text-white shadow-xs'
-                                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-                                }`}
-                            >
-                                <ShieldAlert size={14} className={serverSales.length > 0 && activeTab !== 'server_approvals' ? "text-amber-500 animate-pulse" : ""} />
-                                <span>Bandeja Autorización</span>
-                                {serverSales.length > 0 && (
-                                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${activeTab === 'server_approvals' ? 'bg-white text-indigo-700' : 'bg-amber-500 text-white'}`}>
-                                        {serverSales.length}
-                                    </span>
-                                )}
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => setActiveTab('sales')}
-                                className={`py-2 px-3 text-[11px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                                    activeTab === 'sales'
-                                        ? 'bg-indigo-600 text-white shadow-xs'
-                                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-                                }`}
-                            >
-                                <ShoppingBag size={14} />
-                                <span>Cola Local ({sales.length})</span>
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => setActiveTab('actions')}
-                                className={`py-2 px-3 text-[11px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                                    activeTab === 'actions'
-                                        ? 'bg-indigo-600 text-white shadow-xs'
-                                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-                                }`}
-                            >
-                                <User size={14} />
-                                <span>Acciones ({actions.length})</span>
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => setActiveTab('backup')}
-                                className={`py-2 px-3 text-[11px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                                    activeTab === 'backup'
-                                        ? 'bg-indigo-600 text-white shadow-xs'
-                                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-                                }`}
-                            >
-                                <Download size={14} />
-                                <span>Respaldo</span>
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => setActiveTab('diagnostic')}
-                                className={`py-2 px-3 text-[11px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                                    activeTab === 'diagnostic'
-                                        ? 'bg-indigo-600 text-white shadow-xs'
-                                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
-                                }`}
-                            >
-                                <Server size={14} />
-                                <span>Diagnóstico</span>
-                            </button>
+                        {/* Card 2: Ventas en Cola Local */}
+                        <div 
+                            onClick={() => setActiveTab('sales')}
+                            className={`flex flex-col justify-between p-2.5 rounded-xl bg-white dark:bg-[#070b13] border active:scale-98 transition cursor-pointer select-none shadow-2xs ${
+                                activeTab === 'sales' ? 'border-indigo-500 ring-1 ring-indigo-500/20 shadow-xs' : 'border-slate-200/80 dark:border-slate-800 hover:border-indigo-400'
+                            }`}
+                            title="Toca para ver la cola de ventas locales"
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Cola Local</span>
+                                <ShoppingBag size={12} className="text-indigo-500 shrink-0" />
+                            </div>
+                            <span className="text-sm font-black text-indigo-600 dark:text-indigo-400 mt-0.5">
+                                {stats.salesCount} <span className="text-[10px] font-medium text-slate-400">tickets</span>
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400 truncate">
+                                Total: {stats.totalAmountBob.toFixed(2)} Bs
+                            </span>
                         </div>
 
-                        {/* Search & Bulk Utility Bar for Sales / Contingency tabs */}
-                        {(activeTab === 'server_approvals' || activeTab === 'sales' || activeTab === 'actions') && (
-                            <div className="px-3 sm:px-6 py-2.5 bg-slate-50/40 dark:bg-black/10 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
-                                <div className="relative flex-1">
-                                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                                    <input 
-                                        type="text"
-                                        value={searchTerm}
-                                        onChange={(e) => setSearchTerm(e.target.value)}
-                                        placeholder="Buscar por ticket, cliente, vendedor o producto..."
-                                        className="w-full pl-9 pr-7 py-1.5 rounded-xl text-xs bg-white dark:bg-[#0a0f1d] border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
-                                    />
-                                    {searchTerm && (
-                                        <button 
-                                            onClick={() => setSearchTerm('')} 
-                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
-                                        >
-                                            ✕
-                                        </button>
-                                    )}
-                                </div>
+                        {/* Card 3: Bandeja de Contingencia */}
+                        <div 
+                            onClick={() => setActiveTab('server_approvals')}
+                            className={`flex flex-col justify-between p-2.5 rounded-xl bg-white dark:bg-[#070b13] border active:scale-98 transition cursor-pointer select-none shadow-2xs ${
+                                activeTab === 'server_approvals' ? 'border-indigo-500 ring-1 ring-indigo-500/20 shadow-xs' : 'border-slate-200/80 dark:border-slate-800 hover:border-indigo-400'
+                            }`}
+                            title="Toca para ver la bandeja de autorización de contingencia"
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Cuarentena</span>
+                                <ShieldAlert size={12} className={serverSales.length > 0 ? "text-amber-500 animate-pulse shrink-0" : "text-slate-400 shrink-0"} />
+                            </div>
+                            <span className={`text-sm font-black mt-0.5 ${serverSales.length > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-700 dark:text-slate-300'}`}>
+                                {serverSales.length} <span className="text-[10px] font-medium text-slate-400">en espera</span>
+                            </span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                {serverSales.length > 0 ? 'Requiere admin' : 'Bandeja al día'}
+                            </span>
+                        </div>
 
-                                {activeTab === 'server_approvals' && isAdmin && eligibleServerSalesWithStock.length > 0 && (
-                                    <button
-                                        type="button"
-                                        onClick={handleApproveAllWithStock}
-                                        disabled={isLoadingServerSales}
-                                        className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs shrink-0"
-                                        title="Aprobar en lote todas las ventas offline que tienen stock verificado"
+                        {/* Card 4: Persistencia y Respaldo */}
+                        <div 
+                            onClick={() => setActiveTab('backup')}
+                            className={`flex flex-col justify-between p-2.5 rounded-xl bg-white dark:bg-[#070b13] border active:scale-98 transition cursor-pointer select-none shadow-2xs ${
+                                activeTab === 'backup' ? 'border-indigo-500 ring-1 ring-indigo-500/20 shadow-xs' : 'border-slate-200/80 dark:border-slate-800 hover:border-indigo-400'
+                            }`}
+                            title="Toca para opciones de respaldo y descarga JSON"
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Persistencia</span>
+                                <Database size={12} className="text-emerald-500 shrink-0" />
+                            </div>
+                            <span className="font-extrabold text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 truncate">
+                                IndexedDB Activo
+                            </span>
+                            <div className="flex items-center justify-between mt-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">
+                                <span>Respaldo JSON</span>
+                                <Download size={10} className="shrink-0" />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Fixed Navigation Tabs Bar - Always accessible directly without having to scroll */}
+                    <div className="flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-2 bg-white dark:bg-[#0c111e] border-b border-slate-200/90 dark:border-slate-800 overflow-x-auto scrollbar-none shrink-0 shadow-xs">
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab('server_approvals')}
+                            className={`py-1.5 sm:py-2 px-2.5 sm:px-3 text-[10.5px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                                activeTab === 'server_approvals'
+                                    ? 'bg-indigo-600 text-white shadow-xs'
+                                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                            }`}
+                        >
+                            <ShieldAlert size={13} className={serverSales.length > 0 && activeTab !== 'server_approvals' ? "text-amber-500 animate-pulse" : ""} />
+                            <span>Bandeja Autorización</span>
+                            {serverSales.length > 0 && (
+                                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${activeTab === 'server_approvals' ? 'bg-white text-indigo-700' : 'bg-amber-500 text-white'}`}>
+                                    {serverSales.length}
+                                </span>
+                            )}
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab('sales')}
+                            className={`py-1.5 sm:py-2 px-2.5 sm:px-3 text-[10.5px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                                activeTab === 'sales'
+                                    ? 'bg-indigo-600 text-white shadow-xs'
+                                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                            }`}
+                        >
+                            <ShoppingBag size={13} />
+                            <span>Cola Local ({sales.length})</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab('actions')}
+                            className={`py-1.5 sm:py-2 px-2.5 sm:px-3 text-[10.5px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                                activeTab === 'actions'
+                                    ? 'bg-indigo-600 text-white shadow-xs'
+                                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                            }`}
+                        >
+                            <User size={13} />
+                            <span>Acciones ({actions.length})</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab('backup')}
+                            className={`py-1.5 sm:py-2 px-2.5 sm:px-3 text-[10.5px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                                activeTab === 'backup'
+                                    ? 'bg-indigo-600 text-white shadow-xs'
+                                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                            }`}
+                        >
+                            <Download size={13} />
+                            <span>Respaldo</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab('diagnostic')}
+                            className={`py-1.5 sm:py-2 px-2.5 sm:px-3 text-[10.5px] sm:text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                                activeTab === 'diagnostic'
+                                    ? 'bg-indigo-600 text-white shadow-xs'
+                                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                            }`}
+                        >
+                            <Server size={13} />
+                            <span>Diagnóstico</span>
+                        </button>
+                    </div>
+
+                    {/* Search & Bulk Utility Bar for Sales / Contingency tabs */}
+                    {(activeTab === 'server_approvals' || activeTab === 'sales' || activeTab === 'actions') && (
+                        <div className="px-3 sm:px-6 py-2.5 bg-slate-50/70 dark:bg-black/20 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800/60 shrink-0">
+                            <div className="relative flex-1">
+                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                <input 
+                                    type="text"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    placeholder="Buscar por ticket, cliente, vendedor o producto..."
+                                    className="w-full pl-9 pr-7 py-1.5 rounded-xl text-xs bg-white dark:bg-[#0a0f1d] border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                                />
+                                {searchTerm && (
+                                    <button 
+                                        onClick={() => setSearchTerm('')} 
+                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
                                     >
-                                        <CheckCheck size={14} />
-                                        <span>Aprobar Todo con Stock ({eligibleServerSalesWithStock.length})</span>
+                                        ✕
                                     </button>
                                 )}
                             </div>
-                        )}
+
+                            {activeTab === 'server_approvals' && isAdmin && eligibleServerSalesWithStock.length > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={handleApproveAllWithStock}
+                                    disabled={isLoadingServerSales}
+                                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs shrink-0"
+                                    title="Aprobar en lote todas las ventas offline que tienen stock verificado"
+                                >
+                                    <CheckCheck size={14} />
+                                    <span>Aprobar Todo con Stock ({eligibleServerSalesWithStock.length})</span>
+                                </button>
+                            )}
+                        </div>
+                    )}
+
+                    {/* DEDICATED SCROLLABLE TAB CONTENT (Smooth, native touch scrolling) */}
+                    <div className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-5 pb-8 scrollbar-thin" style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
 
                         {/* TAB CONTENT BODY */}
                         <div className="p-3 sm:p-6 min-h-[350px]">

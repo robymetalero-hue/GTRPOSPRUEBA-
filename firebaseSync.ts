@@ -755,26 +755,39 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
               }
             }
 
-            if (table === 'settings' && docId === 'exchange_rate' && !forceOverwrite) {
+            if (table === 'settings' && docId === 'exchange_rate') {
               try {
                 const localRateRow = db.prepare("SELECT value, updated_at FROM settings WHERE key = 'exchange_rate'").get() as any;
                 const lastAudit = db.prepare("SELECT changed_at, new_rate FROM exchange_rate_audit ORDER BY id DESC LIMIT 1").get() as any;
                 
                 const remoteVal = parseFloat(data.value);
-                const localVal = parseFloat(localRateRow?.value || (lastAudit?.new_rate ? String(lastAudit.new_rate) : ''));
+                const auditRate = (lastAudit && lastAudit.new_rate && !isNaN(parseFloat(lastAudit.new_rate))) ? parseFloat(lastAudit.new_rate) : null;
+                const settingsRate = (localRateRow && localRateRow.value && !isNaN(parseFloat(localRateRow.value))) ? parseFloat(localRateRow.value) : null;
+                const localVal = (auditRate && auditRate > 0 && auditRate !== 6.96) ? auditRate : (settingsRate || 6.96);
 
-                // Shield 1: If incoming remote rate is 6.96 or invalid, but local has a valid audited custom rate (e.g. 13, 8.5, etc.),
+                // Shield 1: If incoming remote rate is 6.96 or invalid, but local has a valid custom rate (e.g. 13, 8.5, etc.),
                 // NEVER let the remote default 6.96 stomp on the user's custom rate!
                 if (!isNaN(remoteVal) && remoteVal === 6.96 && !isNaN(localVal) && localVal > 0 && localVal !== 6.96) {
                   console.log(`[Sync ExchangeRate Shield] Retaining local custom exchange rate of ${localVal} Bs. over remote default 6.96.`);
+                  // Also heal remote Firestore in background so Firestore doesn't hold the stale 6.96
+                  try {
+                    const validation = validateFirestoreWriteOperation(
+                      'settings',
+                      'exchange_rate',
+                      'UPDATE',
+                      { key: 'exchange_rate', value: String(localVal), updated_at: new Date().toISOString() },
+                      { userId: 4, userName: 'admin', userRole: 'admin', isSystemDaemon: true }
+                    );
+                    setDoc(doc(firestore, 'settings', 'exchange_rate'), validation.enrichedPayload).catch(() => {});
+                  } catch (_) {}
                   continue;
                 }
 
-                // Shield 2: Timestamp comparison using lastAudit.changed_at, settings.updated_at, remote updated_at or _tx_timestamp
+                // Shield 2: If local rate was set by user audit and is newer or identical, retain local
                 const localTimestamp = (lastAudit && lastAudit.changed_at) 
                   ? lastAudit.changed_at 
                   : (localRateRow ? localRateRow.updated_at : null);
-                const remoteTimestamp = data.updated_at || data._tx_timestamp || null;
+                const remoteTimestamp = data.updated_at || null; // don't use _tx_timestamp because background sync bumps it
 
                 if (localTimestamp && remoteTimestamp) {
                   const localTime = new Date(localTimestamp).getTime();
