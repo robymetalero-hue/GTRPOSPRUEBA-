@@ -4075,8 +4075,13 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       const dbPath = path.resolve(process.cwd(), "gtr_pos.db");
       if (!fs.existsSync(dbPath)) return null;
 
-      // Keep latest root copy
-      try { fs.copyFileSync(dbPath, path.resolve(process.cwd(), 'gtr_pos.db.bak')); } catch (e) {}
+      // Only update root backup copy if current DB has a verified healthy catalog
+      try {
+        const prodCount = db.prepare("SELECT count(*) as c FROM products").get() as any;
+        if (prodCount && prodCount.c >= 50) {
+          fs.copyFileSync(dbPath, path.resolve(process.cwd(), 'gtr_pos.db.bak'));
+        }
+      } catch (e) {}
 
       // Form sanitized date string
       const dateStr = new Date().toISOString().replace(/[:.]/g, '-');
@@ -4244,12 +4249,15 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
   app.post("/api/backup/restore-safety-backup", async (req, res) => {
     try {
-      if (fs.existsSync('gtr_pos.db.bak')) {
-        // Create a pre-restore backup first
-        createLocalDbSnapshot('pre_safety_restore');
+      let backupPath = 'gtr_pos.db.bak';
+      const goldenPath = path.resolve(process.cwd(), 'backups/PERMANENT_GOLDEN_BACKUP_149_PRODUCTS.db');
+      if (fs.existsSync(goldenPath)) {
+        backupPath = goldenPath;
+      }
 
+      if (fs.existsSync(backupPath)) {
         const DatabaseConstructor = (await import('better-sqlite3')).default;
-        const backupDb = new DatabaseConstructor('gtr_pos.db.bak');
+        const backupDb = new DatabaseConstructor(backupPath);
 
         // Dynamically discover all tables in backupDb to guarantee 100% coverage
         const tables = (backupDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'gsi_%'").all() as any[]).map(t => t.name);
@@ -4259,6 +4267,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           db.pragma('foreign_keys = OFF');
           for (const table of tables) {
             try {
+              if (['system_audit_logs', 'firestore_transaction_ledger', 'deleted_records'].includes(table)) {
+                continue;
+              }
               const rows = backupDb.prepare(`SELECT * FROM "${table}"`).all();
               db.prepare(`DELETE FROM "${table}"`).run();
               if (rows.length === 0) continue;
@@ -4275,6 +4286,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
               console.warn(`[Restore Safety] Table ${table} restore warning:`, err.message);
             }
           }
+          try {
+            db.prepare("DELETE FROM deleted_records WHERE table_name = 'products'").run();
+          } catch (_) {}
           db.pragma('foreign_keys = ON');
         })();
         backupDb.close();
@@ -4282,9 +4296,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         // Push restored data back up to Google Cloud Firestore immediately
         await pushAllLocalToFirestore();
         
-        res.json({ success: true, message: `¡Se ha restaurado la base de datos de respaldo local gtr_pos.db.bak (${restoredCount} registros) con éxito y se ha sincronizado con Firestore!` });
+        res.json({ success: true, message: `¡Se ha restaurado la base de datos de respaldo (${restoredCount} registros) con éxito y se ha sincronizado con Firestore!` });
       } else {
-        res.status(404).json({ error: "No se encontró ningún archivo de respaldo automático (gtr_pos.db.bak) en el servidor." });
+        res.status(404).json({ error: "No se encontró ningún archivo de respaldo automático en el servidor." });
       }
     } catch (e: any) {
       res.status(500).json({ error: "No se pudo restaurar el respaldo de seguridad: " + e.message });

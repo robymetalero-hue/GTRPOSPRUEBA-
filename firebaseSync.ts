@@ -475,26 +475,6 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
     let batch = writeBatch(firestore);
     let opCount = 0;
 
-    // Delete keys from Firestore that no longer exist in local SQLite (soft synchronization)
-    if (rows.length > 0) {
-      for (const docSnap of snapshot.docs) {
-        if (!localIds.has(docSnap.id)) {
-          try {
-            validateFirestoreWriteOperation(tableName, docSnap.id, 'DELETE', undefined, userContext);
-          } catch (delErr: any) {
-            continue;
-          }
-          batch.delete(docSnap.ref);
-          opCount++;
-          if (opCount >= 400) {
-            await batch.commit();
-            batch = writeBatch(firestore);
-            opCount = 0;
-          }
-        }
-      }
-    }
-
     // Upsert all local records to Firestore with strict verification
     for (const row of rows) {
       const docId = tableName === 'settings' ? row.key : String(row.id);
@@ -678,6 +658,12 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
 
           if (forceOverwrite && table !== 'system_audit_logs') {
             db.prepare(`DELETE FROM ${table}`).run();
+            if (deletedIdsSet.size > 0) {
+              try {
+                db.prepare(`DELETE FROM deleted_records WHERE table_name = ?`).run(table);
+                deletedIdsSet.clear();
+              } catch (_) {}
+            }
           }
 
           for (const docSnap of remoteDocs) {
@@ -688,8 +674,8 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
             const docId = String(table === 'settings' ? (data.key || docSnap.id) : (data.id !== undefined ? data.id : docSnap.id));
             remoteIds.add(docId);
 
-            // CRITICAL: Never re-insert records that have been deleted!
-            if (deletedIdsSet.has(docId)) {
+            // Never re-insert records that have been legitimately deleted, unless forceOverwrite is requested
+            if (!forceOverwrite && deletedIdsSet.has(docId)) {
               continue;
             }
 
@@ -817,24 +803,6 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
             db.prepare(insertSql).run(...values);
           }
 
-          // Reconcile deletions
-          if (['products', 'clients', 'departments'].includes(table) && remoteDocs.length > 0 && !forceOverwrite) {
-            try {
-              const localRows = db.prepare(`SELECT id, updated_at FROM ${table}`).all() as any[];
-              for (const localRow of localRows) {
-                const localIdStr = String(localRow.id);
-                if (!remoteIds.has(localIdStr)) {
-                  const updatedAtTime = localRow.updated_at ? new Date(localRow.updated_at).getTime() : 0;
-                  const isRecentlyCreatedLocally = (Date.now() - updatedAtTime) < 60000;
-
-                  if (!isRecentlyCreatedLocally || deletedIdsSet.has(localIdStr)) {
-                    db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(localRow.id);
-                    recordDeletion(table, localIdStr);
-                  }
-                }
-              }
-            } catch (reconcileErr: any) {}
-          }
           updatedTableCount++;
         } catch (tableErr: any) {
           handleSyncError(tableErr, `[Sync Warning] Table "${table}":`);
