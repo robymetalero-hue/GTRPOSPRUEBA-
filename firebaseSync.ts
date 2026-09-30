@@ -747,8 +747,14 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
                 const localStock = localProductStocksMap.get(prodIdNum);
                 const remoteStock = Number(data.stock);
 
-                // Authoritative Cloud Stock: Preserve verified stock from Firestore
-                if (!isNaN(remoteStock)) {
+                // Shield against remote zero stomping:
+                // If remote stock is 0 or NaN, but local SQLite has a verified positive quantity (> 0),
+                // NEVER let a remote zero stomp on genuine local inventory!
+                if (!isNaN(remoteStock) && remoteStock > 0) {
+                  data.stock = remoteStock;
+                } else if (localStock !== undefined && localStock > 0) {
+                  data.stock = localStock;
+                } else if (!isNaN(remoteStock)) {
                   data.stock = remoteStock;
                 } else if (localStock !== undefined) {
                   data.stock = localStock;

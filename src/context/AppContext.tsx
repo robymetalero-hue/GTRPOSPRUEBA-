@@ -1298,7 +1298,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const fetchProducts = async (searchQuery?: string) => {
         try {
             setProductsOffset(0);
-            const queryParam = searchQuery && searchQuery.trim() ? `?search=${encodeURIComponent(searchQuery.trim())}` : '';
+            const cacheBuster = `_t=${Date.now()}`;
+            const queryParam = searchQuery && searchQuery.trim() 
+                ? `?search=${encodeURIComponent(searchQuery.trim())}&${cacheBuster}` 
+                : `?${cacheBuster}`;
             const url = `/api/products${queryParam}`;
             const res = await fetchWithRetry(url);
             const data = await res.json();
@@ -1322,9 +1325,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setCachedMinimalProducts(prods).catch(() => {});
             setIsOffline(false);
         } catch (e) {
-            console.warn("Failed to fetch products, using cached value:", e);
+            console.warn("Failed to fetch products, evaluating cached fallback:", e);
+            const isZeroTainted = (items: Product[]) => {
+                if (!items || items.length < 30) return false;
+                const zeroCount = items.filter(p => Number(p.stock) === 0).length;
+                return (zeroCount / items.length) > 0.6;
+            };
+
             const cachedIdx = await getCachedAppState<Product[]>('cached_products');
-            if (cachedIdx && cachedIdx.length > 0) {
+            if (cachedIdx && cachedIdx.length > 0 && !isZeroTainted(cachedIdx)) {
                 setProducts(cachedIdx);
                 setTotalProducts(cachedIdx.length);
                 setHasMoreProducts(false);
@@ -1333,9 +1342,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 if (cached) {
                     try {
                         const parsed = JSON.parse(cached);
-                        setProducts(parsed);
-                        setTotalProducts(parsed.length);
-                        setHasMoreProducts(false);
+                        if (!isZeroTainted(parsed)) {
+                            setProducts(parsed);
+                            setTotalProducts(parsed.length);
+                            setHasMoreProducts(false);
+                        }
                     } catch (parseErr) {
                         console.error("Failed to parse cached products:", parseErr);
                     }
@@ -1352,8 +1363,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setHasMoreProducts(false);
     };
 
-    // Eagerly preload complete product catalog immediately on mount
+    // Eagerly preload complete product catalog immediately on mount and purge stale SW caches
     useEffect(() => {
+        if ('caches' in window) {
+            caches.open('api-cache').then(cache => {
+                cache.keys().then(keys => {
+                    for (const req of keys) {
+                        if (req.url.includes('/api/products') || req.url.includes('/api/stock')) {
+                            cache.delete(req);
+                        }
+                    }
+                });
+            }).catch(() => {});
+        }
         fetchProducts().catch(() => {});
     }, []);
 
