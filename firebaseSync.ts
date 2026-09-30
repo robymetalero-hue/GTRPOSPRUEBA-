@@ -471,6 +471,18 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
       return String(row.id);
     }));
 
+    // ANTI-TRUNCATION PUSH SHIELD:
+    // If local table has suspiciously few records (< 10) for products/sales, but remote Firestore has a healthy dataset (>= 50),
+    // NEVER push and overwrite Firestore with an impoverished local dataset!
+    if (tableName === 'products' && rows.length < 10) {
+      try {
+        if (snapshot.size >= 50) {
+          console.warn(`[Anti-Truncation Push Shield] Local products count (${rows.length}) is critically lower than remote Firestore (${snapshot.size}). Aborting push to prevent cloud data loss.`);
+          return;
+        }
+      } catch (_) {}
+    }
+
     // Start a Firestore batch
     let batch = writeBatch(firestore);
     let opCount = 0;
@@ -617,12 +629,36 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
 
         try {
           if (snapshot.empty) {
-            if (metaDoc.exists()) {
+            let localCount = 0;
+            try {
+              const countRow = db.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as any;
+              localCount = countRow?.c || 0;
+            } catch (_) {}
+
+            if (localCount > 0 && ['products', 'sales', 'sale_items', 'users', 'clients', 'stock_arrivals', 'departments'].includes(table)) {
+              console.log(`[Anti-Truncation Shield] Remote collection "${table}" is empty, but local has ${localCount} verified records. Retaining local data.`);
+            } else if (metaDoc.exists() && localCount === 0) {
               try {
                 db.prepare(`DELETE FROM ${table}`).run();
               } catch (e: any) {}
             }
             continue;
+          }
+
+          // Anti-Truncation Circuit Breaker:
+          // If remote collection returned significantly fewer records than local healthy data (e.g. < 30% of local),
+          // reject destructive overwrites and keep local verified data.
+          let localRowCount = 0;
+          try {
+            const countRow = db.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as any;
+            localRowCount = countRow?.c || 0;
+          } catch (_) {}
+
+          if (['products', 'sales', 'sale_items', 'stock_arrivals'].includes(table)) {
+            if (localRowCount >= 50 && snapshot.docs.length < Math.floor(localRowCount * 0.3)) {
+              console.warn(`[Anti-Truncation Shield] Remote collection "${table}" returned only ${snapshot.docs.length} docs, but local has ${localRowCount}. Rejecting truncation to protect data integrity.`);
+              continue;
+            }
           }
 
           let allowedColumns: Set<string>;

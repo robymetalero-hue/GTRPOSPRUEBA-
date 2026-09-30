@@ -7488,7 +7488,9 @@ DIRECTIVAS CRÍTICAS:
       mode, 
       override_segregation, 
       override_reason,
-      force_new
+      force_new,
+      exclude_zero_stock = true,
+      sort_order = 'category_name'
     } = req.body;
 
     try {
@@ -7523,15 +7525,35 @@ DIRECTIVAS CRÍTICAS:
         }
       }
 
-      let products: any[] = [];
+      let baseQuery = 'SELECT id, name, sku, stock, category, price_cost, price_unit FROM products WHERE 1=1';
+      const params: any[] = [];
       if (category_filter && category_filter !== 'Todos') {
-        products = db.prepare('SELECT id, name, sku, stock, category FROM products WHERE category = ?').all(category_filter) as any[];
-      } else {
-        products = db.prepare('SELECT id, name, sku, stock, category FROM products').all() as any[];
+        baseQuery += ' AND category = ?';
+        params.push(category_filter);
+      }
+      if (exclude_zero_stock !== false) {
+        baseQuery += ' AND stock > 0';
       }
 
+      // Orden para el conteo: por Categoría y Nombre para recorrer estantes sistemáticamente
+      if (sort_order === 'name_asc') {
+        baseQuery += ' ORDER BY name COLLATE NOCASE ASC';
+      } else if (sort_order === 'sku') {
+        baseQuery += ' ORDER BY sku ASC, name COLLATE NOCASE ASC';
+      } else if (sort_order === 'stock_desc') {
+        baseQuery += ' ORDER BY stock DESC, name COLLATE NOCASE ASC';
+      } else {
+        baseQuery += ' ORDER BY category COLLATE NOCASE ASC, name COLLATE NOCASE ASC';
+      }
+
+      const products = db.prepare(baseQuery).all(...params) as any[];
+
       if (products.length === 0) {
-        return res.status(400).json({ error: "No hay productos disponibles para auditar en el alcance seleccionado." });
+        return res.status(400).json({ 
+          error: exclude_zero_stock !== false 
+            ? "No hay productos con existencias (stock > 0) para auditar en el alcance seleccionado." 
+            : "No hay productos disponibles para auditar en el alcance seleccionado." 
+        });
       }
 
       // Si es admin, por defecto es modo STANDARD (Con Visibilidad de Stock), a menos que especifique BLIND explícitamente
@@ -7541,9 +7563,10 @@ DIRECTIVAS CRÍTICAS:
         const result = db.prepare(`
           INSERT INTO inventory_counts (
             user_id, username, auditor_name, store_name, notes, status, 
-            mode, override_segregation, override_reason, started_at, total_products, category_filter
+            mode, override_segregation, override_reason, started_at, total_products, category_filter,
+            exclude_zero_stock, sort_order
           ) 
-          VALUES (?, ?, ?, ?, ?, 'en_progreso', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+          VALUES (?, ?, ?, ?, ?, 'en_progreso', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
         `).run(
           user_id || 1, 
           username || 'admin', 
@@ -7554,7 +7577,9 @@ DIRECTIVAS CRÍTICAS:
           override_segregation ? 1 : 0, 
           override_reason || null, 
           products.length, 
-          category_filter || null
+          category_filter || null,
+          exclude_zero_stock !== false ? 1 : 0,
+          sort_order || 'category_name'
         );
         
         const countId = result.lastInsertRowid;
@@ -7590,7 +7615,7 @@ DIRECTIVAS CRÍTICAS:
           userId: user_id || auditUser.userId || 1,
           userName: username || auditUser.userName || 'admin',
           reason: notes || 'Conteo físico de inventario iniciado.',
-          afterData: { total_products: products.length, store, auditor: assignedAuditor, mode: finalMode },
+          afterData: { total_products: products.length, store, auditor: assignedAuditor, mode: finalMode, exclude_zero_stock: exclude_zero_stock !== false },
           status: 'success'
         });
       } catch (auditErr: any) {
@@ -7620,12 +7645,26 @@ DIRECTIVAS CRÍTICAS:
       // Si la sesión está activa, asegurarse de que todos los productos del alcance existan en inventory_count_items
       if (count.status === 'en_progreso' || count.status === 'pausado') {
         try {
-          let currentProducts: any[] = [];
+          let syncQuery = 'SELECT id, name, sku, stock, category FROM products WHERE 1=1';
+          const syncParams: any[] = [];
           if (count.category_filter && count.category_filter !== 'Todos') {
-            currentProducts = db.prepare('SELECT id, name, sku, stock, category FROM products WHERE category = ?').all(count.category_filter) as any[];
-          } else {
-            currentProducts = db.prepare('SELECT id, name, sku, stock, category FROM products').all() as any[];
+            syncQuery += ' AND category = ?';
+            syncParams.push(count.category_filter);
           }
+          if (count.exclude_zero_stock !== 0) {
+            syncQuery += ' AND stock > 0';
+          }
+          if (count.sort_order === 'name_asc') {
+            syncQuery += ' ORDER BY name COLLATE NOCASE ASC';
+          } else if (count.sort_order === 'sku') {
+            syncQuery += ' ORDER BY sku ASC, name COLLATE NOCASE ASC';
+          } else if (count.sort_order === 'stock_desc') {
+            syncQuery += ' ORDER BY stock DESC, name COLLATE NOCASE ASC';
+          } else {
+            syncQuery += ' ORDER BY category COLLATE NOCASE ASC, name COLLATE NOCASE ASC';
+          }
+
+          const currentProducts = db.prepare(syncQuery).all(...syncParams) as any[];
 
           const existingItems = db.prepare('SELECT product_id FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
           const existingIds = new Set(existingItems.map(it => it.product_id));
@@ -7633,14 +7672,14 @@ DIRECTIVAS CRÍTICAS:
           const insertMissing = db.prepare(`
             INSERT INTO inventory_count_items (
               inventory_count_id, product_id, product_name, product_sku, 
-              expected_quantity, physical_quantity, difference, status
+              expected_quantity, expected_quantity_snapshot, physical_quantity, difference, status
             )
-            VALUES (?, ?, ?, ?, ?, 0, 0, 'pendiente')
+            VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'pendiente')
           `);
 
           for (const p of currentProducts) {
             if (!existingIds.has(p.id)) {
-              insertMissing.run(id, p.id, p.name, p.sku, p.stock);
+              insertMissing.run(id, p.id, p.name, p.sku, p.stock, p.stock);
             }
           }
 
@@ -7692,11 +7731,35 @@ DIRECTIVAS CRÍTICAS:
         return res.json({ ...sanitizedCount, items, is_blind_sanitized: true });
       }
 
-      // Para sesiones activas o con visibilidad, el stock esperado del sistema coincide siempre con el stock real del POS
+      // Para sesiones completadas/cerradas, el stock esperado del sistema se basa en el snapshot de cuando se inició el conteo
+      let totalDiscrepancies = 0;
+      let totalExact = 0;
+      let netDiscrepancyUnits = 0;
+      let netCostImpact = 0;
+
+      const isCompletedOrClosed = count.status === 'completado' || count.status === 'cerrado' || count.status === 'aprobado' || count.status === 'finalizado';
+
       items = items.map((it: any) => {
-        const liveSysStock = (it.live_stock !== undefined && it.live_stock !== null) ? it.live_stock : (it.expected_quantity || 0);
+        const liveSysStock = isCompletedOrClosed
+          ? ((it.expected_quantity_snapshot !== undefined && it.expected_quantity_snapshot !== null) ? it.expected_quantity_snapshot : (it.expected_quantity || 0))
+          : ((it.live_stock !== undefined && it.live_stock !== null) ? it.live_stock : (it.expected_quantity || 0));
+
         const physical = it.physical_quantity || 0;
         const diff = physical - liveSysStock;
+        const priceCost = Number(it.price_cost || 0);
+        const priceSale = Number(it.price_sale || 0);
+        const costImpact = diff * priceCost;
+        const saleImpact = diff * priceSale;
+
+        if (it.status !== 'pendiente') {
+          if (diff === 0) {
+            totalExact++;
+          } else {
+            totalDiscrepancies++;
+            netDiscrepancyUnits += diff;
+            netCostImpact += costImpact;
+          }
+        }
 
         return {
           ...it,
@@ -7704,12 +7767,27 @@ DIRECTIVAS CRÍTICAS:
           product_sku: it.live_product_sku || it.product_sku,
           product_category: it.live_category || 'General',
           expected_quantity: liveSysStock,
-          live_stock: liveSysStock,
-          difference: diff
+          live_stock: it.live_stock !== undefined ? it.live_stock : liveSysStock,
+          difference: diff,
+          cost_impact: costImpact,
+          sale_impact: saleImpact,
+          is_failed: diff !== 0 && it.status !== 'pendiente'
         };
       });
 
-      res.json({ ...count, items, is_blind_sanitized: false });
+      res.json({ 
+        ...count, 
+        items, 
+        is_blind_sanitized: false,
+        summary_stats: {
+          total_products: items.length,
+          reviewed_count: items.filter(it => it.status !== 'pendiente').length,
+          discrepancy_count: totalDiscrepancies,
+          exact_count: totalExact,
+          net_units_difference: netDiscrepancyUnits,
+          net_cost_impact: netCostImpact
+        }
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -7842,8 +7920,8 @@ DIRECTIVAS CRÍTICAS:
       const userRole = req.headers['x-user-role'] || req.query.user_role || '';
       const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe';
 
-      // Si se solicita aplicar directamente (o si es Administrador concluyendo un conteo directo)
-      if ((status === 'completado' || status === 'finalizado' || status === 'cerrado') && (auto_apply || isAdmin)) {
+      // Si se solicita aplicar directamente (con auto_apply explícito o al cerrar la conciliación)
+      if ((status === 'cerrado') || (auto_apply === true)) {
         const items = db.prepare('SELECT * FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
         
         const transaction = db.transaction(() => {
@@ -10098,6 +10176,45 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
   // Asynchronously restore and synchronize SQLite database state from Cloud Firestore in the background
   (async () => {
     try {
+      // 1. Clear any accidental ghost tombstones for active products
+      try {
+        db.prepare("DELETE FROM deleted_records WHERE table_name = 'products' AND record_id IN (SELECT id FROM products)").run();
+      } catch (_) {}
+
+      // 2. Self-Healing Catalog Guard: If local catalog has dropped below threshold, restore from permanent golden backup
+      try {
+        const prodCount = db.prepare("SELECT count(*) as c FROM products").get() as any;
+        if (!prodCount || prodCount.c < 50) {
+          const goldenPath = path.resolve(process.cwd(), 'backups/PERMANENT_GOLDEN_BACKUP_149_PRODUCTS.db');
+          if (fs.existsSync(goldenPath)) {
+            console.log("[Startup Self-Healing] Catalog below safe threshold. Restoring from permanent golden backup...");
+            const DatabaseConstructor = (await import('better-sqlite3')).default;
+            const backupDb = new DatabaseConstructor(goldenPath);
+            const tables = ['products', 'sales', 'sale_items', 'stock_arrivals', 'cash_movements', 'cash_settlements', 'departments'];
+            db.transaction(() => {
+              for (const table of tables) {
+                const rows = backupDb.prepare(`SELECT * FROM "${table}"`).all();
+                if (rows.length === 0) continue;
+                const firstRowKeys = Object.keys(rows[0]);
+                const placeholders = firstRowKeys.map(() => '?').join(', ');
+                const insertSql = `INSERT OR IGNORE INTO "${table}" (${firstRowKeys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders})`;
+                const stmt = db.prepare(insertSql);
+                for (const r of rows) {
+                  stmt.run(...firstRowKeys.map(k => r[k]));
+                }
+              }
+              try {
+                db.prepare("DELETE FROM deleted_records WHERE table_name = 'products'").run();
+              } catch (_) {}
+            })();
+            backupDb.close();
+            console.log("[Startup Self-Healing] Restored catalog from golden backup successfully.");
+          }
+        }
+      } catch (healErr: any) {
+        console.warn("[Startup Self-Healing] Warning during catalog guard:", healErr.message);
+      }
+
       console.log("[Sync] Restoring SQLite database state from Cloud Firestore in background...");
       await pullFirestoreToLocal();
       console.log("[Sync] Startup database restoration completed successfully.");
