@@ -7476,34 +7476,6 @@ DIRECTIVAS CRÍTICAS:
     }
   });
 
-  // Resumen de categorías y conteo de productos con stock para el módulo de control físico
-  app.get("/api/inventory-counts/categories-summary", (_req, res) => {
-    try {
-      const totalAll = db.prepare("SELECT COUNT(*) as c FROM products").get() as any;
-      const totalWithStock = db.prepare("SELECT COUNT(*) as c FROM products WHERE stock > 0").get() as any;
-      const sumUnits = db.prepare("SELECT COALESCE(SUM(stock), 0) as s FROM products").get() as any;
-      const categoryRows = db.prepare(`
-        SELECT 
-          COALESCE(category, 'Sin Categoría') as category,
-          COUNT(*) as total_products,
-          SUM(CASE WHEN stock > 0 THEN 1 ELSE 0 END) as with_stock,
-          COALESCE(SUM(stock), 0) as total_units
-        FROM products
-        GROUP BY category
-        ORDER BY category COLLATE NOCASE ASC
-      `).all() as any[];
-
-      res.json({
-        total_products: totalAll?.c || 0,
-        with_stock_count: totalWithStock?.c || 0,
-        total_units: sumUnits?.s || 0,
-        categories: categoryRows
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
   // Crear una nueva sesión de conteo físico (Copia el stock esperado como snapshot interno)
   app.post("/api/inventory-counts", (req, res) => {
     const { 
@@ -7516,9 +7488,7 @@ DIRECTIVAS CRÍTICAS:
       mode, 
       override_segregation, 
       override_reason,
-      force_new,
-      exclude_zero_stock = true,
-      sort_order = 'category_name'
+      force_new
     } = req.body;
 
     try {
@@ -7553,35 +7523,15 @@ DIRECTIVAS CRÍTICAS:
         }
       }
 
-      let baseQuery = 'SELECT id, name, sku, stock, category, price_cost, price_unit FROM products WHERE 1=1';
-      const params: any[] = [];
+      let products: any[] = [];
       if (category_filter && category_filter !== 'Todos') {
-        baseQuery += ' AND category = ?';
-        params.push(category_filter);
-      }
-      if (exclude_zero_stock !== false) {
-        baseQuery += ' AND stock > 0';
-      }
-
-      // Orden para el conteo: por Categoría y Nombre para recorrer estantes sistemáticamente
-      if (sort_order === 'name_asc') {
-        baseQuery += ' ORDER BY name COLLATE NOCASE ASC';
-      } else if (sort_order === 'sku') {
-        baseQuery += ' ORDER BY sku ASC, name COLLATE NOCASE ASC';
-      } else if (sort_order === 'stock_desc') {
-        baseQuery += ' ORDER BY stock DESC, name COLLATE NOCASE ASC';
+        products = db.prepare('SELECT id, name, sku, stock, category FROM products WHERE category = ?').all(category_filter) as any[];
       } else {
-        baseQuery += ' ORDER BY category COLLATE NOCASE ASC, name COLLATE NOCASE ASC';
+        products = db.prepare('SELECT id, name, sku, stock, category FROM products').all() as any[];
       }
-
-      const products = db.prepare(baseQuery).all(...params) as any[];
 
       if (products.length === 0) {
-        return res.status(400).json({ 
-          error: exclude_zero_stock !== false 
-            ? "No hay productos con existencias (stock > 0) para auditar en el alcance seleccionado." 
-            : "No hay productos disponibles para auditar en el alcance seleccionado." 
-        });
+        return res.status(400).json({ error: "No hay productos disponibles para auditar en el alcance seleccionado." });
       }
 
       // Si es admin, por defecto es modo STANDARD (Con Visibilidad de Stock), a menos que especifique BLIND explícitamente
@@ -7591,10 +7541,9 @@ DIRECTIVAS CRÍTICAS:
         const result = db.prepare(`
           INSERT INTO inventory_counts (
             user_id, username, auditor_name, store_name, notes, status, 
-            mode, override_segregation, override_reason, started_at, total_products, category_filter,
-            exclude_zero_stock, sort_order
+            mode, override_segregation, override_reason, started_at, total_products, category_filter
           ) 
-          VALUES (?, ?, ?, ?, ?, 'en_progreso', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, 'en_progreso', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
         `).run(
           user_id || 1, 
           username || 'admin', 
@@ -7605,9 +7554,7 @@ DIRECTIVAS CRÍTICAS:
           override_segregation ? 1 : 0, 
           override_reason || null, 
           products.length, 
-          category_filter || null,
-          exclude_zero_stock !== false ? 1 : 0,
-          sort_order || 'category_name'
+          category_filter || null
         );
         
         const countId = result.lastInsertRowid;
@@ -7616,7 +7563,7 @@ DIRECTIVAS CRÍTICAS:
             inventory_count_id, product_id, product_name, product_sku, 
             expected_quantity, expected_quantity_snapshot, physical_quantity, difference, status
           )
-          VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'pendiente')
+          VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'pendiente')
         `);
 
         for (const p of products) {
@@ -7643,7 +7590,7 @@ DIRECTIVAS CRÍTICAS:
           userId: user_id || auditUser.userId || 1,
           userName: username || auditUser.userName || 'admin',
           reason: notes || 'Conteo físico de inventario iniciado.',
-          afterData: { total_products: products.length, store, auditor: assignedAuditor, mode: finalMode, exclude_zero_stock: exclude_zero_stock !== false },
+          afterData: { total_products: products.length, store, auditor: assignedAuditor, mode: finalMode },
           status: 'success'
         });
       } catch (auditErr: any) {
@@ -7673,26 +7620,12 @@ DIRECTIVAS CRÍTICAS:
       // Si la sesión está activa, asegurarse de que todos los productos del alcance existan en inventory_count_items
       if (count.status === 'en_progreso' || count.status === 'pausado') {
         try {
-          let syncQuery = 'SELECT id, name, sku, stock, category FROM products WHERE 1=1';
-          const syncParams: any[] = [];
+          let currentProducts: any[] = [];
           if (count.category_filter && count.category_filter !== 'Todos') {
-            syncQuery += ' AND category = ?';
-            syncParams.push(count.category_filter);
-          }
-          if (count.exclude_zero_stock !== 0) {
-            syncQuery += ' AND stock > 0';
-          }
-          if (count.sort_order === 'name_asc') {
-            syncQuery += ' ORDER BY name COLLATE NOCASE ASC';
-          } else if (count.sort_order === 'sku') {
-            syncQuery += ' ORDER BY sku ASC, name COLLATE NOCASE ASC';
-          } else if (count.sort_order === 'stock_desc') {
-            syncQuery += ' ORDER BY stock DESC, name COLLATE NOCASE ASC';
+            currentProducts = db.prepare('SELECT id, name, sku, stock, category FROM products WHERE category = ?').all(count.category_filter) as any[];
           } else {
-            syncQuery += ' ORDER BY category COLLATE NOCASE ASC, name COLLATE NOCASE ASC';
+            currentProducts = db.prepare('SELECT id, name, sku, stock, category FROM products').all() as any[];
           }
-
-          const currentProducts = db.prepare(syncQuery).all(...syncParams) as any[];
 
           const existingItems = db.prepare('SELECT product_id FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
           const existingIds = new Set(existingItems.map(it => it.product_id));
@@ -7700,14 +7633,14 @@ DIRECTIVAS CRÍTICAS:
           const insertMissing = db.prepare(`
             INSERT INTO inventory_count_items (
               inventory_count_id, product_id, product_name, product_sku, 
-              expected_quantity, expected_quantity_snapshot, physical_quantity, difference, status
+              expected_quantity, physical_quantity, difference, status
             )
-            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'pendiente')
+            VALUES (?, ?, ?, ?, ?, 0, 0, 'pendiente')
           `);
 
           for (const p of currentProducts) {
             if (!existingIds.has(p.id)) {
-              insertMissing.run(id, p.id, p.name, p.sku, p.stock, p.stock);
+              insertMissing.run(id, p.id, p.name, p.sku, p.stock);
             }
           }
 
@@ -7759,35 +7692,11 @@ DIRECTIVAS CRÍTICAS:
         return res.json({ ...sanitizedCount, items, is_blind_sanitized: true });
       }
 
-      // Para sesiones completadas/cerradas, el stock esperado del sistema se basa en el snapshot de cuando se inició el conteo
-      let totalDiscrepancies = 0;
-      let totalExact = 0;
-      let netDiscrepancyUnits = 0;
-      let netCostImpact = 0;
-
-      const isCompletedOrClosed = count.status === 'completado' || count.status === 'cerrado' || count.status === 'aprobado' || count.status === 'finalizado';
-
+      // Para sesiones activas o con visibilidad, el stock esperado del sistema coincide siempre con el stock real del POS
       items = items.map((it: any) => {
-        const liveSysStock = isCompletedOrClosed
-          ? ((it.expected_quantity_snapshot !== undefined && it.expected_quantity_snapshot !== null) ? it.expected_quantity_snapshot : (it.expected_quantity || 0))
-          : ((it.live_stock !== undefined && it.live_stock !== null) ? it.live_stock : (it.expected_quantity || 0));
-
+        const liveSysStock = (it.live_stock !== undefined && it.live_stock !== null) ? it.live_stock : (it.expected_quantity || 0);
         const physical = it.physical_quantity || 0;
         const diff = physical - liveSysStock;
-        const priceCost = Number(it.price_cost || 0);
-        const priceSale = Number(it.price_sale || 0);
-        const costImpact = diff * priceCost;
-        const saleImpact = diff * priceSale;
-
-        if (it.status !== 'pendiente') {
-          if (diff === 0) {
-            totalExact++;
-          } else {
-            totalDiscrepancies++;
-            netDiscrepancyUnits += diff;
-            netCostImpact += costImpact;
-          }
-        }
 
         return {
           ...it,
@@ -7795,27 +7704,12 @@ DIRECTIVAS CRÍTICAS:
           product_sku: it.live_product_sku || it.product_sku,
           product_category: it.live_category || 'General',
           expected_quantity: liveSysStock,
-          live_stock: it.live_stock !== undefined ? it.live_stock : liveSysStock,
-          difference: diff,
-          cost_impact: costImpact,
-          sale_impact: saleImpact,
-          is_failed: diff !== 0 && it.status !== 'pendiente'
+          live_stock: liveSysStock,
+          difference: diff
         };
       });
 
-      res.json({ 
-        ...count, 
-        items, 
-        is_blind_sanitized: false,
-        summary_stats: {
-          total_products: items.length,
-          reviewed_count: items.filter(it => it.status !== 'pendiente').length,
-          discrepancy_count: totalDiscrepancies,
-          exact_count: totalExact,
-          net_units_difference: netDiscrepancyUnits,
-          net_cost_impact: netCostImpact
-        }
-      });
+      res.json({ ...count, items, is_blind_sanitized: false });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -7948,16 +7842,14 @@ DIRECTIVAS CRÍTICAS:
       const userRole = req.headers['x-user-role'] || req.query.user_role || '';
       const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe';
 
-      // Si se solicita aplicar directamente (con auto_apply explícito o al cerrar la conciliación)
-      if ((status === 'cerrado') || (auto_apply === true)) {
-        // SEGURIDAD CRÍTICA: Solo conciliar y ajustar productos que FUERON EFECTIVAMENTE CONTADOS
-        // Los productos que quedaron pendientes o sin conteo físico se mantienen intactos con su stock original
-        const items = db.prepare("SELECT * FROM inventory_count_items WHERE inventory_count_id = ? AND status != 'pendiente' AND physical_quantity IS NOT NULL").all(id) as any[];
+      // Si se solicita aplicar directamente (o si es Administrador concluyendo un conteo directo)
+      if ((status === 'completado' || status === 'finalizado' || status === 'cerrado') && (auto_apply || isAdmin)) {
+        const items = db.prepare('SELECT * FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
         
         const transaction = db.transaction(() => {
           for (const item of items) {
             const exp = item.expected_quantity_snapshot ?? item.expected_quantity ?? 0;
-            const physical = item.physical_quantity ?? exp;
+            const physical = item.physical_quantity ?? 0;
             const diff = physical - exp;
 
             if (diff !== 0) {
@@ -8056,8 +7948,7 @@ DIRECTIVAS CRÍTICAS:
         return res.status(400).json({ error: "Solo se pueden aprobar conteos que estén finalizados por el vendedor." });
       }
 
-      // SEGURIDAD CRÍTICA: Solo conciliar y ajustar productos que FUERON EFECTIVAMENTE CONTADOS
-      const items = db.prepare("SELECT * FROM inventory_count_items WHERE inventory_count_id = ? AND status != 'pendiente' AND physical_quantity IS NOT NULL").all(id) as any[];
+      const items = db.prepare('SELECT * FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
       
       const transaction = db.transaction(() => {
         // Apply stock adjustment to products where difference is non-zero
@@ -10196,6 +10087,12 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
   // Start listening on port immediately so all health checks and API routes respond instantly (sub-10ms)
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server listening on port http://0.0.0.0:${PORT}`);
+    // Boot up the Anti-Override Stock Shield and Periodic Immutable Ledger Reconciler
+    try {
+      startPeriodicLedgerReconciliation(60000);
+    } catch (e: any) {
+      console.warn('[Server Startup] Failed to start periodic ledger reconciler:', e.message);
+    }
   });
 
   // Asynchronously restore and synchronize SQLite database state from Cloud Firestore in the background
