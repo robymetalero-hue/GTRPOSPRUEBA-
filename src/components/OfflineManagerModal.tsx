@@ -538,6 +538,21 @@ export const OfflineManagerModal: React.FC<OfflineManagerModalProps> = ({ isOpen
                         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                             <button
                                 type="button"
+                                onClick={() => {
+                                    if (window.confirm("¿Purgar caché y recargar? Esto descargará de inmediato el catálogo 100% fresco del servidor sin perder tu sesión ni ventas pendientes.")) {
+                                        hardRefreshApp();
+                                    }
+                                }}
+                                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-all cursor-pointer shadow-xs"
+                                title="Limpia la memoria del navegador/PWA y descarga el catálogo en vivo"
+                            >
+                                <RefreshCw size={13} />
+                                <span className="hidden sm:inline">Purgar Caché</span>
+                                <span className="sm:hidden">Caché</span>
+                            </button>
+
+                            <button
+                                type="button"
                                 onClick={handleSyncNow}
                                 disabled={isSyncing || isOffline}
                                 className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs ${

@@ -10145,6 +10145,47 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
       console.log("[Sync] Restoring SQLite database state from Cloud Firestore in background...");
       await pullFirestoreToLocal();
       console.log("[Sync] Startup database restoration completed successfully.");
+
+      // 3. Periodic Self-Healing & Health Monitor (Runs every 15 minutes)
+      setInterval(() => {
+        try {
+          const prodCount = db.prepare("SELECT count(*) as c FROM products").get() as any;
+          const stockHealth = db.prepare("SELECT SUM(CASE WHEN stock > 0 THEN 1 ELSE 0 END) as positive FROM products").get() as any;
+          const total = prodCount?.c || 0;
+          const positive = stockHealth?.positive || 0;
+
+          if (total >= 100 && positive >= 100) {
+            const goldenPath = path.resolve(process.cwd(), 'backups/PERMANENT_GOLDEN_BACKUP_152_PRODUCTS.db');
+            if (!fs.existsSync(goldenPath)) {
+              try {
+                fs.copyFileSync('gtr_pos.db', goldenPath);
+                console.log("[Self-Healing Monitor] Refreshed golden backup from healthy catalog.");
+              } catch (_) {}
+            }
+          } else if (total < 50 || positive < 30) {
+            console.error(`[Self-Healing Alert] Abnormal catalog degradation detected (Total: ${total}, Positive: ${positive}). Auto-restoring from Golden Backup...`);
+            const goldenPath = path.resolve(process.cwd(), 'backups/PERMANENT_GOLDEN_BACKUP_152_PRODUCTS.db');
+            if (fs.existsSync(goldenPath)) {
+              const DatabaseConstructor = require('better-sqlite3');
+              const backupDb = new DatabaseConstructor(goldenPath);
+              const rows = backupDb.prepare('SELECT * FROM products').all();
+              if (rows.length > 0) {
+                const firstRowKeys = Object.keys(rows[0]);
+                const placeholders = firstRowKeys.map(() => '?').join(', ');
+                const insertSql = `INSERT OR REPLACE INTO products (${firstRowKeys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders})`;
+                const stmt = db.prepare(insertSql);
+                db.transaction(() => {
+                  for (const r of rows) stmt.run(...firstRowKeys.map(k => r[k]));
+                })();
+                console.log("[Self-Healing Alert] Auto-restored products from Golden Backup successfully.");
+              }
+              backupDb.close();
+            }
+          }
+        } catch (mErr: any) {
+          console.warn("[Self-Healing Monitor] Warning:", mErr.message);
+        }
+      }, 15 * 60 * 1000);
     } catch (err: any) {
       console.warn("[Sync] Startup pull bypassed or failed:", err.message);
     }

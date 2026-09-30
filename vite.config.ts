@@ -14,22 +14,13 @@ export default defineConfig(() => {
         injectRegister: 'auto',
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
           runtimeCaching: [
             {
-              urlPattern: /^\/api\/(products|stock|diagnose|sync|health|backup)/i,
-              handler: 'NetworkOnly'
-            },
-            {
               urlPattern: /^\/api\/.*/i,
-              handler: 'NetworkFirst',
-              options: {
-                cacheName: 'api-cache',
-                expiration: {
-                  maxEntries: 100,
-                  maxAgeSeconds: 60 * 60 * 24 // 1 day
-                },
-                networkTimeoutSeconds: 4,
-              }
+              handler: 'NetworkOnly'
             }
           ]
         },
