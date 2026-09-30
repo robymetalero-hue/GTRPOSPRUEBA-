@@ -318,8 +318,10 @@ export default function POS() {
     }, [search]);
 
     useEffect(() => {
-        fetchProducts(debouncedSearch);
-    }, [debouncedSearch]);
+        if (products.length === 0) {
+            fetchProducts();
+        }
+    }, [products.length]);
 
     const [isScannerOpen, setIsScannerOpen] = useState(false);
     const [selectedCategory, setSelectedCategory] = useState("Todos");
@@ -2846,7 +2848,6 @@ export default function POS() {
                                         triggerVibrate(10);
                                         setSearch(val);
                                         setDebouncedSearch(val);
-                                        fetchProducts(val);
                                     }}
                                     isSearching={search !== debouncedSearch} 
                                     suggestions={filtered}

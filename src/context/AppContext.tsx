@@ -892,7 +892,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [hasMoreProducts, setHasMoreProducts] = useState(false);
     const [totalProducts, setTotalProducts] = useState(0);
     const [productsOffset, setProductsOffset] = useState(0);
-    const PRODUCTS_LIMIT = 50;
     const [clients, setClients] = useState<Client[]>(() => {
         try {
             const cached = localStorage.getItem('cached_clients');
@@ -1286,27 +1285,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const fetchProducts = async (searchQuery?: string) => {
         try {
             setProductsOffset(0);
-            const url = searchQuery ? `/api/products?lazy=true&limit=${PRODUCTS_LIMIT}&offset=0&search=${encodeURIComponent(searchQuery)}` : `/api/products?lazy=true&limit=${PRODUCTS_LIMIT}&offset=0`;
+            const queryParam = searchQuery && searchQuery.trim() ? `?search=${encodeURIComponent(searchQuery.trim())}` : '';
+            const url = `/api/products${queryParam}`;
             const res = await fetchWithRetry(url);
             const data = await res.json();
             
-            // Check if response has pagination wrapper
+            // Check if response has pagination wrapper or is a direct array
+            let prods: Product[] = [];
+            let total = 0;
             if (data && Array.isArray(data.products)) {
-                setProducts(data.products);
-                setTotalProducts(data.total);
-                setHasMoreProducts(data.has_more);
-                safeLocalStorageSetItem('cached_products', JSON.stringify(data.products));
-                cacheAppState('cached_products', data.products);
-                setCachedMinimalProducts(data.products).catch(() => {});
-            } else {
-                const arr = Array.isArray(data) ? data : [];
-                setProducts(arr);
-                setTotalProducts(arr.length);
-                setHasMoreProducts(false);
-                safeLocalStorageSetItem('cached_products', JSON.stringify(arr));
-                cacheAppState('cached_products', arr);
-                setCachedMinimalProducts(arr).catch(() => {});
+                prods = data.products;
+                total = typeof data.total === 'number' ? data.total : prods.length;
+            } else if (Array.isArray(data)) {
+                prods = data;
+                total = data.length;
             }
+            
+            setProducts(prods);
+            setTotalProducts(total);
+            setHasMoreProducts(false);
+            safeLocalStorageSetItem('cached_products', JSON.stringify(prods));
+            cacheAppState('cached_products', prods);
+            setCachedMinimalProducts(prods).catch(() => {});
             setIsOffline(false);
         } catch (e) {
             console.warn("Failed to fetch products, using cached value:", e);
@@ -1334,32 +1334,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     };
 
-    const loadMoreProducts = async (searchQuery?: string) => {
-        try {
-            const nextOffset = productsOffset + PRODUCTS_LIMIT;
-            const url = searchQuery ? `/api/products?lazy=true&limit=${PRODUCTS_LIMIT}&offset=${nextOffset}&search=${encodeURIComponent(searchQuery)}` : `/api/products?lazy=true&limit=${PRODUCTS_LIMIT}&offset=${nextOffset}`;
-            const res = await fetchWithRetry(url);
-            const data = await res.json();
-            
-            if (data && Array.isArray(data.products)) {
-                setProducts(prev => {
-                    const existingIds = new Set(prev.map(p => p.id));
-                    const newItems = data.products.filter((p: any) => !existingIds.has(p.id));
-                    const merged = [...prev, ...newItems];
-                    // Save merged set in cache to prevent offline gaps
-                    safeLocalStorageSetItem('cached_products', JSON.stringify(merged));
-                    cacheAppState('cached_products', merged);
-                    return merged;
-                });
-                setProductsOffset(nextOffset);
-                setTotalProducts(data.total);
-                setHasMoreProducts(data.has_more);
-            }
-            setIsOffline(false);
-        } catch (e) {
-            console.error("Failed to load more products:", e);
-        }
+    const loadMoreProducts = async (_searchQuery?: string) => {
+        // Full product catalog is always synchronized and retained in memory
+        setHasMoreProducts(false);
     };
+
+    // Eagerly preload complete product catalog immediately on mount
+    useEffect(() => {
+        fetchProducts().catch(() => {});
+    }, []);
 
     const fetchClients = async () => {
         try {

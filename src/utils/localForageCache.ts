@@ -160,8 +160,8 @@ export async function setCachedMinimalProducts(products: Product[]): Promise<voi
 
         await productCache.setItem(PRODUCTS_KEY, minimalCatalog);
         try {
-            // Keep small subset in localStorage for instant sync bootstrap
-            localStorage.setItem('cached_products', JSON.stringify(minimalCatalog.slice(0, 100)));
+            // Keep catalog in localStorage for instant sync bootstrap
+            localStorage.setItem('cached_products', JSON.stringify(minimalCatalog));
         } catch {}
     } catch (err) {
         console.warn('[localForage] Error storing products catalog:', err);

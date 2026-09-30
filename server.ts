@@ -2334,7 +2334,12 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           allParams = [...allParams, ...orderParams];
       }
 
-      if (limit !== null) {
+      // Server-side Catalog Safeguard:
+      // POS, inventory, search, and barcode scanning require the complete product catalog in memory.
+      // Never truncate catalog to 50 items. Only apply pagination if explicitly requested via paginate=true.
+      const isExplicitPagination = req.query.paginate === 'true' && limit !== null && !req.query.lazy;
+
+      if (isExplicitPagination) {
         const countParams = [...whereParams];
         queryStr += ` LIMIT ? OFFSET ? `;
         allParams.push(limit, offset);
@@ -2368,7 +2373,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           });
         }
 
-        if (req.query.lazy === 'true') {
+        if (req.query.lazy === 'true' || req.query.limit) {
           res.json({
             products,
             total: products.length,

@@ -241,8 +241,10 @@ export default function Inventory() {
     }, [searchQuery]);
 
     useEffect(() => {
-        fetchProducts(debouncedSearchQuery);
-    }, [debouncedSearchQuery]);
+        if (products.length === 0) {
+            fetchProducts();
+        }
+    }, [products.length]);
 
     // Form states
     const [name, setName] = useState("");
@@ -1555,14 +1557,12 @@ export default function Inventory() {
                     onEnter={(val) => {
                         setSearchQuery(val);
                         setDebouncedSearchQuery(val);
-                        fetchProducts(val);
                     }}
                     isSearching={searchQuery !== debouncedSearchQuery}
                     suggestions={finalFilteredProducts}
                     onSelectSuggestion={(prod) => {
                         setSearchQuery(prod.name);
                         setDebouncedSearchQuery(prod.name);
-                        fetchProducts(prod.name);
                     }}
                     exchangeRate={exchangeRate}
                 />

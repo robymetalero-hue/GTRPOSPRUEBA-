@@ -446,6 +446,22 @@ try {
 } catch (e: any) {}
 
 try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN exclude_zero_stock INTEGER DEFAULT 1");
+} catch (e: any) {}
+
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN sort_order TEXT DEFAULT 'category_name'");
+} catch (e: any) {}
+
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN approved_at DATETIME DEFAULT NULL");
+} catch (e: any) {}
+
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN approved_by_username TEXT DEFAULT NULL");
+} catch (e: any) {}
+
+try {
   db.exec("ALTER TABLE inventory_count_items ADD COLUMN expected_quantity_snapshot INTEGER DEFAULT 0");
 } catch (e: any) {}
 
