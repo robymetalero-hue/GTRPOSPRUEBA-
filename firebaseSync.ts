@@ -743,34 +743,16 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
                   data._force_stock_reconciliation
                 );
 
-                if (!isFormalReconciliation) {
-                  if (localStock !== undefined) {
+                if (!isFormalReconciliation && !forceOverwrite) {
+                  if (localStock !== undefined && localStock > 0) {
                     // Shield local physical stock: Retain verified local stock so remote metadata edits never stomp on inventory
                     data.stock = localStock;
-                  } else {
-                    // Newly received product from remote without prior local row.
-                    // Register its initial creation event in system_audit_logs if missing so the ledger is born in sync.
-                    const initialStock = Number(data.stock) || 0;
-                    try {
-                      const hasLog = db.prepare(
-                        "SELECT id FROM system_audit_logs WHERE (related_product_id = ? OR entity_id = ?) AND event_type = 'creacion_producto' LIMIT 1"
-                      ).get(prodIdNum, prodIdNum);
-                      if (!hasLog) {
-                        db.prepare(`
-                          INSERT INTO system_audit_logs (
-                            event_type, action, user_name, user_role, entity_type, entity_id,
-                            related_product_id, quantity_before, quantity_changed, quantity_after,
-                            reason, created_at
-                          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        `).run(
-                          'creacion_producto', 'creacion', 'sync_shield', 'admin', 'product',
-                          prodIdNum, prodIdNum, 0, initialStock, initialStock,
-                          'Alta remota sincronizada: Stock inicial blindado en libro mayor inmutable',
-                          data.created_at || new Date().toISOString()
-                        );
-                      }
-                    } catch (_) {}
+                  } else if (data.stock !== undefined && data.stock !== null) {
+                    // If local stock was 0 or unassigned, but remote Firestore has verified stock, adopt the remote stock!
+                    data.stock = Number(data.stock);
                   }
+                } else if (data.stock !== undefined && data.stock !== null) {
+                  data.stock = Number(data.stock);
                 }
               } catch (e: any) {
                 console.warn('[Sync Stock Shield] Error shielding product stock:', e.message);
