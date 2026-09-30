@@ -16,7 +16,7 @@ import { pullFirestoreToLocal, pushFirestoreToLocal, startPeriodicLedgerReconcil
 import { getProductForensicTimeline, auditEntireCatalog, searchProductsForAudit, generateForensicMarkdownReport, getAvailableAuditPeriods, auditDatabaseByPeriod, reconcileProductDiscrepancy } from "./forensicAuditEngine.ts";
 import { requestContextStorage, getRecentFirestoreLedger, getFirestoreLedgerStats, validateFirestoreWriteOperation } from "./firestoreIntegrityMiddleware.ts";
 import { collection, getDocs, doc, getDoc, setDoc } from "firebase/firestore";
-import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration } from "@google/genai";
+import { GoogleGenAI, Modality, Type, type LiveServerMessage, type FunctionDeclaration } from "@google/genai";
 import { WebSocketServer } from "ws";
 import http from "http";
 import net from "net";
