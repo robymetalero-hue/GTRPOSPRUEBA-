@@ -884,7 +884,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [products, setProducts] = useState<Product[]>(() => {
         try {
             const cached = localStorage.getItem('cached_products');
-            return cached ? JSON.parse(cached) : [];
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    // Cache Health Shield: If cached catalog has an abnormal zero-stock ratio (e.g. > 60% zero stock when items >= 30),
+                    // discard the tainted zero-stock cache from previous sessions to guarantee real quantities from server.
+                    const zeroCount = parsed.filter((p: any) => Number(p.stock) === 0).length;
+                    if (parsed.length >= 30 && zeroCount / parsed.length > 0.6) {
+                        console.warn("[Cache Shield] Stale zero-stock cache detected from previous session. Bypassing in favor of clean verified server catalog.");
+                        return [];
+                    }
+                    return parsed;
+                }
+            }
+            return [];
         } catch {
             return [];
         }
@@ -1387,8 +1400,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 return p;
             });
             try {
-                localStorage.setItem('cached_products', JSON.stringify(updated));
+                safeLocalStorageSetItem('cached_products', JSON.stringify(updated));
                 cacheAppState('cached_products', updated);
+                setCachedMinimalProducts(updated).catch(() => {});
             } catch (err) {
                 console.warn("Error caching updated products:", err);
             }

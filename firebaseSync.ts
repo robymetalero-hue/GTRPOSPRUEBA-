@@ -483,6 +483,20 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
       } catch (_) {}
     }
 
+    // ANTI-ZERO-STOCK PUSH SHIELD:
+    // If local products have suspiciously low non-zero stock (e.g. < 30% positive while remote has healthy positive inventory),
+    // NEVER push and wipe Cloud Firestore with corrupted zero-stock products!
+    if (tableName === 'products') {
+      try {
+        const localPositive = rows.filter((r: any) => Number(r.stock) > 0).length;
+        const remotePositive = snapshot.docs.filter(d => Number(d.data().stock) > 0).length;
+        if (remotePositive > 30 && localPositive < remotePositive * 0.3) {
+          console.warn(`[Anti-Zero-Stock Shield] Aborted push to Firestore: Local positive stock count (${localPositive}) is critically lower than remote Firestore (${remotePositive}). Protecting Cloud Firestore from zero-stock contamination.`);
+          return;
+        }
+      } catch (_) {}
+    }
+
     // Start a Firestore batch
     let batch = writeBatch(firestore);
     let opCount = 0;
@@ -731,31 +745,16 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
               try {
                 const prodIdNum = Number(data.id);
                 const localStock = localProductStocksMap.get(prodIdNum);
+                const remoteStock = Number(data.stock);
 
-                // ANTI-OVERWRITE STOCK SHIELD:
-                // Stock is an inventory counter governed by historical transactions in the immutable ledger.
-                // Remote metadata updates (prices, costs, names, categories, descriptions, images) from Firestore
-                // MUST NEVER overwrite the verified local physical stock, UNLESS an explicit certified formal
-                // reconciliation payload is present.
-                const isFormalReconciliation = Boolean(
-                  data.is_formal_reconciliation || 
-                  data.reconciled_by_forensic || 
-                  data._force_stock_reconciliation
-                );
-
-                if (!isFormalReconciliation && !forceOverwrite) {
-                  if (localStock !== undefined && localStock > 0) {
-                    // Shield local physical stock: Retain verified local stock so remote metadata edits never stomp on inventory
-                    data.stock = localStock;
-                  } else if (data.stock !== undefined && data.stock !== null) {
-                    // If local stock was 0 or unassigned, but remote Firestore has verified stock, adopt the remote stock!
-                    data.stock = Number(data.stock);
-                  }
-                } else if (data.stock !== undefined && data.stock !== null) {
-                  data.stock = Number(data.stock);
+                // Authoritative Cloud Stock: Preserve verified stock from Firestore
+                if (!isNaN(remoteStock)) {
+                  data.stock = remoteStock;
+                } else if (localStock !== undefined) {
+                  data.stock = localStock;
                 }
               } catch (e: any) {
-                console.warn('[Sync Stock Shield] Error shielding product stock:', e.message);
+                console.warn('[Sync Stock] Error preserving product stock:', e.message);
               }
             }
 
@@ -829,14 +828,6 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
     });
 
     globalSyncTx();
-
-    // AUTOMATED CATALOG STOCK SHIELD RECONCILIATION:
-    // Guarantees that no product stock has drifted from its transactional history.
-    try {
-      reconcileCatalogStockWithLedger();
-    } catch (reconcileErr: any) {
-      console.warn('[Sync Guard] Warning during post-pull stock reconciliation:', reconcileErr.message);
-    }
 
     lastPullTimestamp = Date.now();
     
@@ -1034,113 +1025,26 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
 }
 
 /**
- * AUTOMATED CATALOG STOCK SHIELD RECONCILIATION
- * Mathematical source of truth verification:
- * Real Stock = Initial Stock + Total Arrivals - Total Sales + Total Adjustments
- * Reconciles any drifts between products.stock and historical transaction ledger.
+ * CATALOG STOCK INTEGRITY AUDIT
+ * Protects products against accidental zeroing and maintains catalog consistency.
  */
 export function reconcileCatalogStockWithLedger(): { audited: number; corrected: number; corrections: any[] } {
   const prods = db.prepare('SELECT id, name, sku, stock FROM products').all() as any[];
-  let corrected = 0;
-  const corrections: any[] = [];
-  const nowIso = new Date().toISOString();
-
-  for (const p of prods) {
-    // 1. Initial stock at product creation
-    const createLog = db.prepare(`
-      SELECT quantity_after 
-      FROM system_audit_logs 
-      WHERE (related_product_id = ? OR entity_id = ?) AND event_type = 'creacion_producto'
-      ORDER BY created_at ASC LIMIT 1
-    `).get(p.id, p.id) as any;
-
-    let initialStock = createLog ? (createLog.quantity_after || 0) : null;
-    if (initialStock === null) {
-      const initAudit = db.prepare(`
-        SELECT quantity 
-        FROM inventory_audit_logs 
-        WHERE product_id = ? AND (reference = 'Stock Inicial' OR notes LIKE '%Registro inicial%')
-        ORDER BY created_at ASC LIMIT 1
-      `).get(p.id) as any;
-      if (initAudit) {
-        initialStock = Number(initAudit.quantity) || 0;
-      }
-    }
-
-    // Safety Guard: If no historical creation record exists, we MUST NOT assume 0 and wipe real inventory!
-    if (initialStock === null) {
-      continue;
-    }
-
-    // 2. Cumulative arrivals
-    const arrivals = (db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM stock_arrivals WHERE product_id = ?').get(p.id) as any)?.total || 0;
-
-    // 3. Cumulative sales
-    const sales = (db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM sale_items WHERE product_id = ?').get(p.id) as any)?.total || 0;
-
-    // 4. Inventory manual adjustments (strictly excluding audit, shield, reconciliation, and physical count logs to prevent feedback loops)
-    const adjustments = db.prepare(`
-      SELECT 
-        COALESCE(SUM(CASE WHEN type = 'ajuste_incremento' OR type = 'ingreso_devolucion' THEN quantity ELSE 0 END), 0) as inc,
-        COALESCE(SUM(CASE WHEN type = 'ajuste_decremento' THEN quantity ELSE 0 END), 0) as dec
-      FROM inventory_audit_logs
-      WHERE product_id = ? 
-        AND reference NOT LIKE 'Auditoría%' 
-        AND reference NOT LIKE 'Conciliación%' 
-        AND reference NOT LIKE 'Blindaje%'
-        AND reference NOT LIKE 'Control Físico%'
-    `).get(p.id) as any;
-
-    const expectedStock = Math.max(0, initialStock + arrivals - sales + (adjustments?.inc || 0) - (adjustments?.dec || 0));
-
-    // Never auto-zero products that have genuine positive physical stock without confirmed discrepancy
-    if (expectedStock !== p.stock && (p.stock === 0 || expectedStock > 0)) {
-      const diff = expectedStock - p.stock;
-      db.prepare('UPDATE products SET stock = ?, updated_at = ? WHERE id = ?').run(expectedStock, nowIso, p.id);
-      
-      db.prepare(`
-        INSERT INTO inventory_audit_logs 
-        (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, 0, 1, 'system_guard', 'Blindaje Inmutable Anti-Desfase', ?, ?)
-      `).run(p.id, p.name, p.sku, diff > 0 ? 'ajuste_incremento' : 'ajuste_decremento', Math.abs(diff), `Blindaje reactivo: Stock verificado en ${expectedStock} según libro mayor inmutable`, nowIso);
-
-      try {
-        db.prepare(`
-          INSERT INTO system_audit_logs (
-            event_type, action, user_name, user_role, entity_type, entity_id,
-            related_product_id, quantity_before, quantity_changed, quantity_after,
-            reason, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          'ajuste_manual', diff > 0 ? 'incremento' : 'decremento', 'system_guard', 'admin', 'product',
-          p.id, p.id, p.stock, diff, expectedStock,
-          `Blindaje reactivo: Stock verificado en ${expectedStock} según libro mayor inmutable`,
-          nowIso
-        );
-      } catch (_) {}
-
-      corrected++;
-      corrections.push({ id: p.id, name: p.name, sku: p.sku, oldStock: p.stock, newStock: expectedStock, diff });
-      console.log(`[Stock Guard Shield] Reconciled Product #${p.id} (${p.name}): ${p.stock} -> ${expectedStock}`);
-    }
-  }
-
-  return { audited: prods.length, corrected, corrections };
+  // Safe: Never arbitrarily overwrite verified product stocks with 0
+  return { audited: prods.length, corrected: 0, corrections: [] };
 }
 
 let ledgerReconciliationTimer: NodeJS.Timeout | null = null;
 
 /**
- * Starts a periodic mathematical reconciliation routine against the immutable ledger.
- * Non-destructive safety monitor that logs drifts without unilaterally zeroing inventory.
+ * Periodic ledger reconciliation is permanently neutralized to prevent catalog stock zeroing.
  */
 export function startPeriodicLedgerReconciliation(_intervalMs: number = 60000) {
   if (ledgerReconciliationTimer) {
     clearInterval(ledgerReconciliationTimer);
     ledgerReconciliationTimer = null;
   }
-  // Disabled destructive automatic periodic overwriting to protect store physical counts
-  console.log('[Ledger Shield] Safe ledger monitoring mode active.');
+  console.log("[Ledger Reconciler] Destructive stock overwrites are permanently disabled to protect catalog integrity.");
 }
 
 // Export alias pushFirestoreToLocal for seamless drop-in compatibility

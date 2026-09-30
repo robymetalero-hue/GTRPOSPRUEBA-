@@ -5679,7 +5679,6 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       if (isFullSync) {
         console.log("[PWA API Sync] Explicit full bidirectional sync requested...");
         await pullFirestoreToLocal();
-        reconcileCatalogStockWithLedger();
         await pushAllLocalToFirestore();
       } else {
         // Routine fast online sync: Push locally updated tables to cloud in non-blocking fashion
@@ -10092,12 +10091,6 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
   // Start listening on port immediately so all health checks and API routes respond instantly (sub-10ms)
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server listening on port http://0.0.0.0:${PORT}`);
-    // Boot up the Anti-Override Stock Shield and Periodic Immutable Ledger Reconciler
-    try {
-      startPeriodicLedgerReconciliation(60000);
-    } catch (e: any) {
-      console.warn('[Server Startup] Failed to start periodic ledger reconciler:', e.message);
-    }
   });
 
   // Asynchronously restore and synchronize SQLite database state from Cloud Firestore in the background
@@ -10108,15 +10101,22 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
         db.prepare("DELETE FROM deleted_records WHERE table_name = 'products' AND record_id IN (SELECT id FROM products)").run();
       } catch (_) {}
 
-      // 2. Self-Healing Catalog Guard: If local catalog has dropped below threshold, restore from permanent golden backup
+      // 2. Self-Healing Catalog & Stock Guard: Automatically restores catalog and real stock if below threshold
       try {
         const prodCount = db.prepare("SELECT count(*) as c FROM products").get() as any;
-        if (!prodCount || prodCount.c < 50) {
-          const goldenPath = path.resolve(process.cwd(), 'backups/PERMANENT_GOLDEN_BACKUP_149_PRODUCTS.db');
-          if (fs.existsSync(goldenPath)) {
-            console.log("[Startup Self-Healing] Catalog below safe threshold. Restoring from permanent golden backup...");
+        const stockHealth = db.prepare("SELECT SUM(CASE WHEN stock > 0 THEN 1 ELSE 0 END) as positive FROM products").get() as any;
+        const total = prodCount?.c || 0;
+        const positive = stockHealth?.positive || 0;
+
+        if (total < 50 || positive < 30) {
+          const goldenPath = path.resolve(process.cwd(), 'backups/PERMANENT_GOLDEN_BACKUP_152_PRODUCTS.db');
+          const fallbackPath = path.resolve(process.cwd(), 'backups/PERMANENT_GOLDEN_BACKUP_149_PRODUCTS.db');
+          const targetGolden = fs.existsSync(goldenPath) ? goldenPath : (fs.existsSync(fallbackPath) ? fallbackPath : null);
+
+          if (targetGolden) {
+            console.log("[Startup Self-Healing] Catalog stock below safe threshold. Restoring verified stocks from permanent golden backup...");
             const DatabaseConstructor = (await import('better-sqlite3')).default;
-            const backupDb = new DatabaseConstructor(goldenPath);
+            const backupDb = new DatabaseConstructor(targetGolden);
             const tables = ['products', 'sales', 'sale_items', 'stock_arrivals', 'cash_movements', 'cash_settlements', 'departments'];
             db.transaction(() => {
               for (const table of tables) {
@@ -10124,7 +10124,7 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
                 if (rows.length === 0) continue;
                 const firstRowKeys = Object.keys(rows[0]);
                 const placeholders = firstRowKeys.map(() => '?').join(', ');
-                const insertSql = `INSERT OR IGNORE INTO "${table}" (${firstRowKeys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders})`;
+                const insertSql = `INSERT OR REPLACE INTO "${table}" (${firstRowKeys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders})`;
                 const stmt = db.prepare(insertSql);
                 for (const r of rows) {
                   stmt.run(...firstRowKeys.map(k => r[k]));
@@ -10135,7 +10135,7 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
               } catch (_) {}
             })();
             backupDb.close();
-            console.log("[Startup Self-Healing] Restored catalog from golden backup successfully.");
+            console.log("[Startup Self-Healing] Restored catalog and real stocks from golden backup successfully.");
           }
         }
       } catch (healErr: any) {
