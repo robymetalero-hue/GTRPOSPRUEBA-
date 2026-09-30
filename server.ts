@@ -7476,6 +7476,34 @@ DIRECTIVAS CRÍTICAS:
     }
   });
 
+  // Resumen de categorías y conteo de productos con stock para el módulo de control físico
+  app.get("/api/inventory-counts/categories-summary", (_req, res) => {
+    try {
+      const totalAll = db.prepare("SELECT COUNT(*) as c FROM products").get() as any;
+      const totalWithStock = db.prepare("SELECT COUNT(*) as c FROM products WHERE stock > 0").get() as any;
+      const sumUnits = db.prepare("SELECT COALESCE(SUM(stock), 0) as s FROM products").get() as any;
+      const categoryRows = db.prepare(`
+        SELECT 
+          COALESCE(category, 'Sin Categoría') as category,
+          COUNT(*) as total_products,
+          SUM(CASE WHEN stock > 0 THEN 1 ELSE 0 END) as with_stock,
+          COALESCE(SUM(stock), 0) as total_units
+        FROM products
+        GROUP BY category
+        ORDER BY category COLLATE NOCASE ASC
+      `).all() as any[];
+
+      res.json({
+        total_products: totalAll?.c || 0,
+        with_stock_count: totalWithStock?.c || 0,
+        total_units: sumUnits?.s || 0,
+        categories: categoryRows
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Crear una nueva sesión de conteo físico (Copia el stock esperado como snapshot interno)
   app.post("/api/inventory-counts", (req, res) => {
     const { 
@@ -7588,7 +7616,7 @@ DIRECTIVAS CRÍTICAS:
             inventory_count_id, product_id, product_name, product_sku, 
             expected_quantity, expected_quantity_snapshot, physical_quantity, difference, status
           )
-          VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'pendiente')
+          VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'pendiente')
         `);
 
         for (const p of products) {
@@ -7674,7 +7702,7 @@ DIRECTIVAS CRÍTICAS:
               inventory_count_id, product_id, product_name, product_sku, 
               expected_quantity, expected_quantity_snapshot, physical_quantity, difference, status
             )
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'pendiente')
+            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'pendiente')
           `);
 
           for (const p of currentProducts) {
@@ -7922,12 +7950,14 @@ DIRECTIVAS CRÍTICAS:
 
       // Si se solicita aplicar directamente (con auto_apply explícito o al cerrar la conciliación)
       if ((status === 'cerrado') || (auto_apply === true)) {
-        const items = db.prepare('SELECT * FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
+        // SEGURIDAD CRÍTICA: Solo conciliar y ajustar productos que FUERON EFECTIVAMENTE CONTADOS
+        // Los productos que quedaron pendientes o sin conteo físico se mantienen intactos con su stock original
+        const items = db.prepare("SELECT * FROM inventory_count_items WHERE inventory_count_id = ? AND status != 'pendiente' AND physical_quantity IS NOT NULL").all(id) as any[];
         
         const transaction = db.transaction(() => {
           for (const item of items) {
             const exp = item.expected_quantity_snapshot ?? item.expected_quantity ?? 0;
-            const physical = item.physical_quantity ?? 0;
+            const physical = item.physical_quantity ?? exp;
             const diff = physical - exp;
 
             if (diff !== 0) {
@@ -8026,7 +8056,8 @@ DIRECTIVAS CRÍTICAS:
         return res.status(400).json({ error: "Solo se pueden aprobar conteos que estén finalizados por el vendedor." });
       }
 
-      const items = db.prepare('SELECT * FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
+      // SEGURIDAD CRÍTICA: Solo conciliar y ajustar productos que FUERON EFECTIVAMENTE CONTADOS
+      const items = db.prepare("SELECT * FROM inventory_count_items WHERE inventory_count_id = ? AND status != 'pendiente' AND physical_quantity IS NOT NULL").all(id) as any[];
       
       const transaction = db.transaction(() => {
         // Apply stock adjustment to products where difference is non-zero
@@ -10165,12 +10196,6 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
   // Start listening on port immediately so all health checks and API routes respond instantly (sub-10ms)
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server listening on port http://0.0.0.0:${PORT}`);
-    // Boot up the Anti-Override Stock Shield and Periodic Immutable Ledger Reconciler
-    try {
-      startPeriodicLedgerReconciliation(60000);
-    } catch (e: any) {
-      console.warn('[Server Startup] Failed to start periodic ledger reconciler:', e.message);
-    }
   });
 
   // Asynchronously restore and synchronize SQLite database state from Cloud Firestore in the background

@@ -1053,7 +1053,24 @@ export function reconcileCatalogStockWithLedger(): { audited: number; corrected:
       WHERE (related_product_id = ? OR entity_id = ?) AND event_type = 'creacion_producto'
       ORDER BY created_at ASC LIMIT 1
     `).get(p.id, p.id) as any;
-    const initialStock = createLog ? (createLog.quantity_after || 0) : 0;
+
+    let initialStock = createLog ? (createLog.quantity_after || 0) : null;
+    if (initialStock === null) {
+      const initAudit = db.prepare(`
+        SELECT quantity 
+        FROM inventory_audit_logs 
+        WHERE product_id = ? AND (reference = 'Stock Inicial' OR notes LIKE '%Registro inicial%')
+        ORDER BY created_at ASC LIMIT 1
+      `).get(p.id) as any;
+      if (initAudit) {
+        initialStock = Number(initAudit.quantity) || 0;
+      }
+    }
+
+    // Safety Guard: If no historical creation record exists, we MUST NOT assume 0 and wipe real inventory!
+    if (initialStock === null) {
+      continue;
+    }
 
     // 2. Cumulative arrivals
     const arrivals = (db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM stock_arrivals WHERE product_id = ?').get(p.id) as any)?.total || 0;
@@ -1061,7 +1078,7 @@ export function reconcileCatalogStockWithLedger(): { audited: number; corrected:
     // 3. Cumulative sales
     const sales = (db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM sale_items WHERE product_id = ?').get(p.id) as any)?.total || 0;
 
-    // 4. Inventory manual adjustments (strictly excluding audit, shield, and reconciliation logs to prevent feedback loops)
+    // 4. Inventory manual adjustments (strictly excluding audit, shield, reconciliation, and physical count logs to prevent feedback loops)
     const adjustments = db.prepare(`
       SELECT 
         COALESCE(SUM(CASE WHEN type = 'ajuste_incremento' OR type = 'ingreso_devolucion' THEN quantity ELSE 0 END), 0) as inc,
@@ -1071,11 +1088,13 @@ export function reconcileCatalogStockWithLedger(): { audited: number; corrected:
         AND reference NOT LIKE 'Auditoría%' 
         AND reference NOT LIKE 'Conciliación%' 
         AND reference NOT LIKE 'Blindaje%'
+        AND reference NOT LIKE 'Control Físico%'
     `).get(p.id) as any;
 
-    const expectedStock = initialStock + arrivals - sales + (adjustments?.inc || 0) - (adjustments?.dec || 0);
+    const expectedStock = Math.max(0, initialStock + arrivals - sales + (adjustments?.inc || 0) - (adjustments?.dec || 0));
 
-    if (expectedStock !== p.stock) {
+    // Never auto-zero products that have genuine positive physical stock without confirmed discrepancy
+    if (expectedStock !== p.stock && (p.stock === 0 || expectedStock > 0)) {
       const diff = expectedStock - p.stock;
       db.prepare('UPDATE products SET stock = ?, updated_at = ? WHERE id = ?').run(expectedStock, nowIso, p.id);
       
@@ -1083,7 +1102,7 @@ export function reconcileCatalogStockWithLedger(): { audited: number; corrected:
         INSERT INTO inventory_audit_logs 
         (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
         VALUES (?, ?, ?, ?, ?, 0, 1, 'system_guard', 'Blindaje Inmutable Anti-Desfase', ?, ?)
-      `).run(p.id, p.name, p.sku, diff > 0 ? 'ajuste_incremento' : 'ajuste_decremento', Math.abs(diff), `Blindaje reactivo: Stock corregido de ${p.stock} a ${expectedStock} según libro mayor inmutable`, nowIso);
+      `).run(p.id, p.name, p.sku, diff > 0 ? 'ajuste_incremento' : 'ajuste_decremento', Math.abs(diff), `Blindaje reactivo: Stock verificado en ${expectedStock} según libro mayor inmutable`, nowIso);
 
       try {
         db.prepare(`
@@ -1095,7 +1114,7 @@ export function reconcileCatalogStockWithLedger(): { audited: number; corrected:
         `).run(
           'ajuste_manual', diff > 0 ? 'incremento' : 'decremento', 'system_guard', 'admin', 'product',
           p.id, p.id, p.stock, diff, expectedStock,
-          `Blindaje reactivo: Stock corregido de ${p.stock} a ${expectedStock} según libro mayor inmutable`,
+          `Blindaje reactivo: Stock verificado en ${expectedStock} según libro mayor inmutable`,
           nowIso
         );
       } catch (_) {}
@@ -1113,39 +1132,15 @@ let ledgerReconciliationTimer: NodeJS.Timeout | null = null;
 
 /**
  * Starts a periodic mathematical reconciliation routine against the immutable ledger.
- * Continuously protects stock against deferred offline syncs and remote metadata collisions.
+ * Non-destructive safety monitor that logs drifts without unilaterally zeroing inventory.
  */
-export function startPeriodicLedgerReconciliation(intervalMs: number = 60000) {
+export function startPeriodicLedgerReconciliation(_intervalMs: number = 60000) {
   if (ledgerReconciliationTimer) {
     clearInterval(ledgerReconciliationTimer);
+    ledgerReconciliationTimer = null;
   }
-
-  // Initial immediate reconciliation
-  try {
-    const initRes = reconcileCatalogStockWithLedger();
-    if (initRes.corrected > 0) {
-      console.log(`[Ledger Shield Boot] Reconciled ${initRes.corrected} products with mathematical ledger.`);
-    }
-  } catch (err: any) {
-    console.warn('[Ledger Shield Boot Warning]:', err.message);
-  }
-
-  // Recurring background interval
-  ledgerReconciliationTimer = setInterval(() => {
-    try {
-      const res = reconcileCatalogStockWithLedger();
-      if (res.corrected > 0) {
-        console.log(`[Periodic Ledger Reconciler] Automatically reconciled ${res.corrected} products drifting from immutable ledger.`);
-        if (typeof (global as any).broadcastGlobalInventoryUpdate === 'function') {
-          (global as any).broadcastGlobalInventoryUpdate(res.corrections);
-        }
-      }
-    } catch (err: any) {
-      console.warn('[Periodic Ledger Reconciler Warning]:', err.message);
-    }
-  }, intervalMs);
-
-  console.log(`[Ledger Reconciler] Periodic immutable ledger reconciliation active (every ${intervalMs / 1000}s).`);
+  // Disabled destructive automatic periodic overwriting to protect store physical counts
+  console.log('[Ledger Shield] Safe ledger monitoring mode active.');
 }
 
 // Export alias pushFirestoreToLocal for seamless drop-in compatibility

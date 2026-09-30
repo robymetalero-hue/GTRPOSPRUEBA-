@@ -129,18 +129,41 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const [adminNotes, setAdminNotes] = useState('');
 
   // Carga inicial
+  const [catalogSummary, setCatalogSummary] = useState<{
+    total_products: number;
+    with_stock_count: number;
+    total_units: number;
+    categories: Array<{ category: string; total_products: number; with_stock: number; total_units: number }>;
+  } | null>(null);
+
+  const fetchCatalogSummary = async () => {
+    try {
+      const res = await fetch('/api/inventory-counts/categories-summary');
+      if (res.ok) {
+        const data = await res.json();
+        setCatalogSummary(data);
+        if (Array.isArray(data.categories)) {
+          setCategories(data.categories.map((c: any) => c.category));
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to fetch catalog summary:", e);
+    }
+  };
+
   useEffect(() => {
     fetchProducts();
+    fetchCatalogSummary();
     fetchActiveSession();
     fetchHistory();
   }, [activeTab]);
 
   useEffect(() => {
-    if (products && products.length > 0) {
+    if (!catalogSummary && products && products.length > 0) {
       const uniqueCats = Array.from(new Set(products.map(p => p.category || 'Sin Categoría'))).filter(Boolean);
       setCategories(uniqueCats);
     }
-  }, [products]);
+  }, [products, catalogSummary]);
 
   // Validar segregación de funciones
   useEffect(() => {
@@ -159,6 +182,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
     await fetchProducts();
+    await fetchCatalogSummary();
     await fetchActiveSession();
     await fetchHistory();
     setIsRefreshing(false);
@@ -730,9 +754,12 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
   // Recuento de productos activos en almacén (con stock > 0 vs total)
   const productsWithStockCount = useMemo(() => {
+    if (catalogSummary?.with_stock_count !== undefined) {
+      return catalogSummary.with_stock_count;
+    }
     if (!products) return 0;
     return products.filter(p => (p.stock || 0) > 0).length;
-  }, [products]);
+  }, [catalogSummary, products]);
 
   return (
     <div 
@@ -885,10 +912,17 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                             onChange={e => setSelectedCategory(e.target.value)}
                             className="w-full mt-1 p-2 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                           >
-                            <option value="Todos">Todas las Categorías ({products?.length || 0} prod.)</option>
-                            {categories.map(cat => (
-                              <option key={cat} value={cat}>{cat.toUpperCase()}</option>
-                            ))}
+                            <option value="Todos">
+                              Todas las Categorías ({catalogSummary?.total_products || products?.length || 0} prod. - {catalogSummary?.with_stock_count || productsWithStockCount} activos con stock)
+                            </option>
+                            {categories.map(cat => {
+                              const cInfo = catalogSummary?.categories?.find(c => c.category.toLowerCase() === cat.toLowerCase());
+                              return (
+                                <option key={cat} value={cat}>
+                                  {cat.toUpperCase()} {cInfo ? `(${cInfo.total_products} prod. - ${cInfo.with_stock} con stock)` : ''}
+                                </option>
+                              );
+                            })}
                           </select>
                         </div>
 
