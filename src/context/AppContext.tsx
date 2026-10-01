@@ -1295,8 +1295,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     };
 
-    const fetchProducts = async (searchQuery?: string) => {
+    const fetchProducts = async (searchQuery?: string, force?: boolean) => {
         try {
+            // Phase 10: Lightweight version probe to prevent redundant full-catalog downloads
+            if (!searchQuery && !force && products.length > 0) {
+                try {
+                    const verRes = await fetch(`/api/catalog/version?_t=${Date.now()}`);
+                    if (verRes.ok) {
+                        const verData = await verRes.json();
+                        const localCat = sessionStorage.getItem('last_catalog_version');
+                        const localInv = sessionStorage.getItem('last_inventory_version');
+                        if (
+                            localCat &&
+                            localInv &&
+                            localCat === String(verData.catalogVersion) &&
+                            localInv === String(verData.inventoryVersion)
+                        ) {
+                            // Inventory and catalog are up-to-date, avoid redundant network download
+                            return;
+                        }
+                    }
+                } catch (_) {}
+            }
+
             setProductsOffset(0);
             const cacheBuster = `_t=${Date.now()}`;
             const queryParam = searchQuery && searchQuery.trim() 
@@ -1324,6 +1345,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             cacheAppState('cached_products', prods);
             setCachedMinimalProducts(prods).catch(() => {});
             setIsOffline(false);
+
+            // Update local versions if available
+            try {
+                fetch(`/api/catalog/version?_t=${Date.now()}`)
+                    .then(r => r.json())
+                    .then(v => {
+                        if (v && v.catalogVersion && v.inventoryVersion) {
+                            sessionStorage.setItem('last_catalog_version', String(v.catalogVersion));
+                            sessionStorage.setItem('last_inventory_version', String(v.inventoryVersion));
+                        }
+                    })
+                    .catch(() => {});
+            } catch (_) {}
         } catch (e) {
             console.warn("Failed to fetch products, evaluating cached fallback:", e);
             const isZeroTainted = (items: Product[]) => {
@@ -1790,8 +1824,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         type: 'info'
                     }
                 });
-                // Refresh local lists
-                await fetchProducts();
+                // Refresh local lists with forced fresh fetch
+                sessionStorage.removeItem('last_inventory_version');
+                await fetchProducts(undefined, true);
                 await fetchClients();
             }
         } catch (err) {
@@ -1832,7 +1867,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 console.log("[PWA Sync] Sync completed successfully:", data.status);
                 // Concurrently fetch latest data in parallel
                 await Promise.allSettled([
-                    fetchProducts(),
+                    fetchProducts(undefined, forceFull),
                     fetchClients(),
                     fetchExchangeRate(),
                     fetchDepartments()

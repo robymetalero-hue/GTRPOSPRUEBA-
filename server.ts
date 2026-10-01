@@ -167,6 +167,16 @@ async function startServer() {
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
+  // Universal Zero-Cache Policy for all API Endpoints
+  // Ensures mobile browsers, service workers and proxies never serve stale stock or catalog data from cache
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Vary', 'Authorization');
+    next();
+  });
+
   // Audit User Context Extraction Middleware & Strict Authentication Gate
   app.use((req, res, next) => {
     let authHeader = req.headers['authorization'] || req.headers['Authorization'];
@@ -246,6 +256,7 @@ async function startServer() {
     const publicPaths = [
       '/api/health',
       '/api/app-version',
+      '/api/catalog/version',
       '/api/auth/login',
       '/api/auth/recover-password',
       '/api/auth/verify-supervisor'
@@ -834,6 +845,52 @@ async function startServer() {
         force_reload: true
       });
     }
+  });
+
+  // Simple, robust catalog and inventory versioning (Phase 8, 9, 10)
+  const getCatalogAndInventoryVersions = () => {
+    try {
+      const catRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("catalog_version") as any;
+      const invRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("inventory_version") as any;
+      let catVer = catRow ? parseInt(catRow.value, 10) : 1;
+      let invVer = invRow ? parseInt(invRow.value, 10) : 1;
+      if (isNaN(catVer) || catVer < 1) catVer = 1;
+      if (isNaN(invVer) || invVer < 1) invVer = 1;
+      return { catalogVersion: catVer, inventoryVersion: invVer };
+    } catch {
+      return { catalogVersion: 1, inventoryVersion: 1 };
+    }
+  };
+
+  const incrementCatalogVersion = () => {
+    try {
+      const current = getCatalogAndInventoryVersions();
+      const nextVer = current.catalogVersion + 1;
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('catalog_version', ?)").run(nextVer.toString());
+      return nextVer;
+    } catch {
+      return 1;
+    }
+  };
+
+  const incrementInventoryVersion = () => {
+    try {
+      const current = getCatalogAndInventoryVersions();
+      const nextVer = current.inventoryVersion + 1;
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('inventory_version', ?)").run(nextVer.toString());
+      return nextVer;
+    } catch {
+      return 1;
+    }
+  };
+
+  // Ultra-lightweight version probe endpoint (<2ms response)
+  app.get("/api/catalog/version", (req, res) => {
+    const versions = getCatalogAndInventoryVersions();
+    res.json({
+      ...versions,
+      serverTime: new Date().toISOString()
+    });
   });
 
   // REST API: Save and trigger forced push update signal to all live terminal devices
@@ -2864,6 +2921,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       }
 
       syncAfterWrite(syncMap);
+      incrementCatalogVersion();
+      incrementInventoryVersion();
       res.json({ success: true, inserted, updated, skipped });
     } catch (e: any) {
       console.error("Bulk import error:", e);
@@ -3025,6 +3084,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       }
 
       syncAfterWrite(syncMap);
+      incrementCatalogVersion();
+      incrementInventoryVersion();
       checkAndNotifyLowStock(id);
       res.json({ success: true });
     } catch (e: any) {
@@ -3071,6 +3132,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       });
 
       syncAfterWrite("products");
+      incrementCatalogVersion();
+      incrementInventoryVersion();
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -3683,6 +3746,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       }
 
       syncAfterWrite(syncMap);
+      incrementInventoryVersion();
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -4835,6 +4899,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       }
 
       syncAfterWrite(syncMap);
+      incrementInventoryVersion();
       res.json({ success: true, totalRefundAmount, inventoryReconciliation: reconciledItems });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -5130,6 +5195,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         }
 
         syncAfterWrite(syncMap);
+        incrementInventoryVersion();
         res.json({ success: true, saleId });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -10146,24 +10212,25 @@ Responde de forma sumamente atenta, con alta proactividad, y con precisión mate
       await pullFirestoreToLocal();
       console.log("[Sync] Startup database restoration completed successfully.");
 
-      // 3. Periodic Self-Healing & Health Monitor (Runs every 15 minutes)
+      // 3. Periodic Self-Healing & Health Monitor with Dual Metrics (Runs every 15 minutes)
       setInterval(() => {
         try {
           const prodCount = db.prepare("SELECT count(*) as c FROM products").get() as any;
-          const stockHealth = db.prepare("SELECT SUM(CASE WHEN stock > 0 THEN 1 ELSE 0 END) as positive FROM products").get() as any;
+          const stockHealth = db.prepare("SELECT SUM(CASE WHEN stock > 0 THEN 1 ELSE 0 END) as positive, SUM(COALESCE(stock, 0)) as totalUnits FROM products").get() as any;
           const total = prodCount?.c || 0;
           const positive = stockHealth?.positive || 0;
+          const totalUnits = stockHealth?.totalUnits || 0;
 
-          if (total >= 100 && positive >= 100) {
+          if (total >= 100 && positive >= 100 && totalUnits >= 1000) {
             const goldenPath = path.resolve(process.cwd(), 'backups/PERMANENT_GOLDEN_BACKUP_152_PRODUCTS.db');
             if (!fs.existsSync(goldenPath)) {
               try {
                 fs.copyFileSync('gtr_pos.db', goldenPath);
-                console.log("[Self-Healing Monitor] Refreshed golden backup from healthy catalog.");
+                console.log(`[Self-Healing Monitor] Refreshed golden backup from healthy catalog (Total: ${total}, Positive: ${positive}, Units: ${totalUnits}).`);
               } catch (_) {}
             }
-          } else if (total < 50 || positive < 30) {
-            console.error(`[Self-Healing Alert] Abnormal catalog degradation detected (Total: ${total}, Positive: ${positive}). Auto-restoring from Golden Backup...`);
+          } else if (total < 50 || (positive < 30 && totalUnits < 500)) {
+            console.error(`[Self-Healing Alert] Critical catalog degradation detected (Total: ${total}, Positive: ${positive}, Units: ${totalUnits}). Auto-restoring from Golden Backup...`);
             const goldenPath = path.resolve(process.cwd(), 'backups/PERMANENT_GOLDEN_BACKUP_152_PRODUCTS.db');
             if (fs.existsSync(goldenPath)) {
               const DatabaseConstructor = require('better-sqlite3');

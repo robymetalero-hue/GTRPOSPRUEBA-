@@ -539,7 +539,11 @@ export const OfflineManagerModal: React.FC<OfflineManagerModalProps> = ({ isOpen
                             <button
                                 type="button"
                                 onClick={() => {
-                                    if (window.confirm("¿Purgar caché y recargar? Esto descargará de inmediato el catálogo 100% fresco del servidor sin perder tu sesión ni ventas pendientes.")) {
+                                    const pendingCount = (sales?.length || 0) + (actions?.length || 0);
+                                    const msg = pendingCount > 0
+                                        ? `Tienes ${sales?.length || 0} venta(s) y ${actions?.length || 0} acción(es) offline pendientes. Se conservarán 100% seguras e intactas durante la limpieza. ¿Deseas purgar el caché y recargar?`
+                                        : "¿Purgar caché y recargar? Esto descargará de inmediato el catálogo 100% fresco del servidor sin perder tu sesión ni ventas pendientes.";
+                                    if (window.confirm(msg)) {
                                         hardRefreshApp();
                                     }
                                 }}

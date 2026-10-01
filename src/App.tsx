@@ -405,6 +405,29 @@ function AppLayout() {
     const [releaseNotes, setReleaseNotes] = useState("");
     const [isRefreshing, setIsRefreshing] = useState(false);
 
+    const isCashierActive = () => {
+        try {
+            const rawTabs = localStorage.getItem('cached_sales_tabs');
+            if (rawTabs) {
+                const tabs = JSON.parse(rawTabs);
+                if (Array.isArray(tabs) && tabs.some((t: any) => Array.isArray(t.cart) && t.cart.length > 0)) {
+                    return true;
+                }
+            }
+            const rawCart = localStorage.getItem('gtr_pos_active_cart_backup');
+            if (rawCart) {
+                const cart = JSON.parse(rawCart);
+                if (Array.isArray(cart) && cart.length > 0) {
+                    return true;
+                }
+            }
+            if (sessionStorage.getItem('pos_checkout_in_progress') === 'true') {
+                return true;
+            }
+        } catch (_) {}
+        return false;
+    };
+
     const checkAppVersion = async () => {
         try {
             const res = await fetch(`/api/app-version?_t=${Date.now()}`);
@@ -416,7 +439,16 @@ function AppLayout() {
                     setServerVersion(comparison.serverVersion);
                     setReleaseNotes(data.release_notes || "");
                     setShowUpdateWarning(true);
-                    await hardRefreshApp();
+
+                    // Phase 6: Safe PWA update without interrupting in-flight cashier transactions
+                    if (isCashierActive()) {
+                        console.log("[PWA Update] Actualización detectada pero aplazada: cajero con venta o carrito activo.");
+                        sessionStorage.setItem('pending_app_reload', 'true');
+                    } else {
+                        console.log("[PWA Update] Aplicando actualización limpia de forma segura...");
+                        sessionStorage.removeItem('pending_app_reload');
+                        await hardRefreshApp();
+                    }
                 }
             }
         } catch (err) {
@@ -426,6 +458,7 @@ function AppLayout() {
 
     const handleForceUpdate = async () => {
         setIsRefreshing(true);
+        sessionStorage.removeItem('pending_app_reload');
         await hardRefreshApp();
     };
 
@@ -439,18 +472,38 @@ function AppLayout() {
                     setServerVersion(comparison.serverVersion);
                     setReleaseNotes(data.release_notes || "");
                     setShowUpdateWarning(true);
-                    await hardRefreshApp();
+
+                    if (isCashierActive()) {
+                        console.log("[PWA Push] Actualización aplazada: operación activa en curso.");
+                        sessionStorage.setItem('pending_app_reload', 'true');
+                    } else {
+                        sessionStorage.removeItem('pending_app_reload');
+                        await hardRefreshApp();
+                    }
                 }
             }
         };
         window.addEventListener('app-update-pushed', handlePushUpdate);
+
+        // Phase 7: Check version on natural visibility change (e.g. returning to app on Android)
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible' && navigator.onLine) {
+                checkAppVersion();
+                if (sessionStorage.getItem('pending_app_reload') === 'true' && !isCashierActive()) {
+                    sessionStorage.removeItem('pending_app_reload');
+                    hardRefreshApp();
+                }
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
         
-        // Active version checks
+        // Active version check on mount and every 5 minutes (reduced from aggressive 30s)
         checkAppVersion();
-        const updateInterval = setInterval(checkAppVersion, 30000);
+        const updateInterval = setInterval(checkAppVersion, 300000);
 
         return () => {
             window.removeEventListener('app-update-pushed', handlePushUpdate);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
             clearInterval(updateInterval);
         };
     }, []);
