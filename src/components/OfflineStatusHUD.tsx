@@ -26,7 +26,6 @@ export const OfflineStatusHUD: React.FC<OfflineStatusHUDProps> = ({ variant = 'c
     React.useEffect(() => {
         let mounted = true;
         const checkServerPending = async () => {
-            if (!navigator.onLine) return;
             try {
                 const token = localStorage.getItem('auth_token');
                 const headers: Record<string, string> = {};

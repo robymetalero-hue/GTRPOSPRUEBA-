@@ -184,7 +184,7 @@ async function startServer() {
   // SECURITY: Rate Limiting for auth endpoints
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: 100,
     message: { error: 'Demasiados intentos de inicio de sesión, inténtelo más tarde.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -286,7 +286,9 @@ async function startServer() {
       '/api/catalog/version',
       '/api/auth/login',
       '/api/auth/recover-password',
-      '/api/auth/verify-supervisor'
+      '/api/auth/verify-supervisor',
+      '/api/inventory-counts/lock-status',
+      '/api/offline-sales/count'
     ];
 
     const isPublicRoute = 
@@ -308,7 +310,9 @@ async function startServer() {
         req.path === '/api/settings/exchange-rate/audit' ||
         req.path === '/api/settings/kiosk' ||
         req.path === '/api/settings/receipt' ||
-        req.path === '/api/settings/app-version'
+        req.path === '/api/settings/app-version' ||
+        req.path === '/api/inventory-counts/lock-status' ||
+        req.path === '/api/offline-sales/count'
       )) ||
       (req.method === 'POST' && req.path === '/api/settings/exchange-rate'); // Verified authoritatively inside the endpoint handler
     
@@ -5828,10 +5832,11 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
   // 1. Submit offline sale from POS client to quarantine queue (does NOT discount stock)
   app.post("/api/offline-sales/submit", (req, res) => {
+    const safeId = req.body?.id || `offline_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const safeOpId = req.body?.clientOperationId || req.body?.client_operation_id || safeId;
+
     try {
       const {
-        id,
-        clientOperationId,
         user_id,
         client_id,
         client_name,
@@ -5843,10 +5848,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         currency,
         notes,
         items
-      } = req.body;
-
-      const safeId = id || `offline_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const safeOpId = clientOperationId || req.body.client_operation_id || safeId;
+      } = req.body || {};
 
       // 1. Check if this sale was already approved or recorded in sales
       const existingSale = db.prepare('SELECT id FROM sales WHERE client_operation_id = ?').get(safeOpId) as any;
@@ -5943,6 +5945,15 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         message: 'Venta offline recibida y registrada en la bandeja de autorización del administrador.'
       });
     } catch (e: any) {
+      if (e && (typeof e.message === 'string' && (e.message.includes('UNIQUE constraint failed') || e.message.includes('PRIMARY KEY')) || e.code === 'SQLITE_CONSTRAINT_UNIQUE')) {
+        const existing = db.prepare('SELECT id, status FROM offline_pending_sales WHERE client_operation_id = ? OR id = ?').get(safeOpId, safeId) as any;
+        return res.json({
+          success: true,
+          status: existing?.status === 'approved' ? 'already_approved' : 'already_queued',
+          id: existing?.id || safeId,
+          message: 'Venta ya registrada previamente (idempotencia confirmada).'
+        });
+      }
       console.error('[Offline Sales Submit Error]:', e.message);
       res.status(500).json({ error: e.message });
     }

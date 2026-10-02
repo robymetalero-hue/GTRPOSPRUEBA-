@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'gtr-pos-v4-cache';
+const CACHE_VERSION = 'gtr-pos-v5-cache';
 const CACHE_NAME = CACHE_VERSION;
 const ASSETS_TO_CACHE = [
   '/',

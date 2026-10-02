@@ -287,7 +287,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSupervisorInfo(null);
     }, []);
 
-    const [isOffline, setIsOffline] = useState(() => !window.navigator.onLine);
+    const [isOffline, setIsOffline] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
     const syncRunningRef = useRef(false);
     const [syncError, setSyncError] = useState<string | null>(null);
@@ -537,15 +537,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, []);
 
     const fetchWithRetry = async (url: string, options?: RequestInit, retries = 2, delay = 500): Promise<Response> => {
-        if (typeof navigator !== 'undefined' && !navigator.onLine) {
-            throw new Error('Offline mode - network is disconnected');
-        }
         let timeoutId: any;
         try {
             let signal = options?.signal;
             if (!signal && typeof AbortController !== 'undefined') {
                 const controller = new AbortController();
-                timeoutId = setTimeout(() => controller.abort(), 4000);
+                timeoutId = setTimeout(() => controller.abort(), 15000);
                 signal = controller.signal;
             }
 
@@ -573,9 +570,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return response;
         } catch (error) {
             if (timeoutId) clearTimeout(timeoutId);
-            if (typeof navigator !== 'undefined' && !navigator.onLine) {
-                throw new Error('Offline mode - network is disconnected');
-            }
             if (retries > 0) {
                 console.warn(`[Sync Retry] Fetch to ${url} failed. Retrying in ${delay}ms... (${retries} retries left)`);
                 await new Promise((resolve) => setTimeout(resolve, delay));
@@ -1005,9 +999,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     setExchangeRate(parsed);
                 }
             }
-            if (e instanceof Error && (e.message.includes('Failed to fetch') || e.message.includes('fetch'))) {
-                setIsOffline(true);
-            }
         }
     };
 
@@ -1256,7 +1247,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const fetchInventoryLockStatus = async () => {
         try {
-            const res = await fetchWithRetry('/api/inventory-counts/lock-status');
+            const token = typeof localStorage !== 'undefined' ? localStorage.getItem('auth_token') : null;
+            const headers: Record<string, string> = {};
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            const res = await fetch('/api/inventory-counts/lock-status', { headers });
             if (res.ok) {
                 const data = await res.json();
                 setInventoryLock({
@@ -1404,9 +1398,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     }
                 }
             }
-            if (e instanceof Error && (e.message.includes('Failed to fetch') || e.message.includes('fetch'))) {
-                setIsOffline(true);
-            }
         }
     };
 
@@ -1460,9 +1451,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         console.error("Failed to parse cached clients:", parseErr);
                     }
                 }
-            }
-            if (e instanceof Error && (e.message.includes('Failed to fetch') || e.message.includes('fetch'))) {
-                setIsOffline(true);
             }
         }
     };
@@ -2005,13 +1993,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         let isCancelled = false;
 
         const checkHealth = async () => {
-            if (!navigator.onLine) {
-                if (!isOffline) setIsOffline(true);
-                setNetworkQuality('offline');
-                setNetworkLatency(null);
-                return;
-            }
-
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 6000);
             const startTime = performance.now();
@@ -2030,9 +2011,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         setNetworkLatency(latency);
                         const quality = latency > 600 ? 'unstable' : 'online';
                         setNetworkQuality(quality);
-                        if (isOffline) {
-                            setIsOffline(false);
-                        }
+                        setIsOffline(false);
                     } else {
                         setNetworkQuality('unstable');
                     }
@@ -2042,7 +2021,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 if (!isCancelled) {
                     setNetworkLatency(null);
                     setNetworkQuality('offline');
-                    if (!isOffline) setIsOffline(true);
+                    setIsOffline(true);
                 }
             }
         };
@@ -2054,7 +2033,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             isCancelled = true;
             if (timer) clearInterval(timer);
         };
-    }, [isOffline]);
+    }, []);
 
     // Auto trigger sync when the system transitions to online
     useEffect(() => {
