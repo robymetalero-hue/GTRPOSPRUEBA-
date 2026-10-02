@@ -194,8 +194,6 @@ export const APPEND_ONLY_TABLES = [
   'cash_settlements',
   'inventory_audit_logs',
   'system_audit_logs',
-  'inventory_counts',
-  'inventory_count_items',
   'firestore_transaction_ledger'
 ];
 
@@ -762,6 +760,18 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
               } catch (e: any) {
                 console.warn('[Sync Stock] Error preserving product stock:', e.message);
               }
+            }
+
+            if (table === 'inventory_counts') {
+              try {
+                const localCount = db.prepare("SELECT status FROM inventory_counts WHERE id = ?").get(docId) as any;
+                if (localCount && ['cancelado', 'aprobado', 'cerrado'].includes(localCount.status)) {
+                  if (['en_progreso', 'pausado'].includes(data.status)) {
+                    console.log(`[Sync Count Shield] Retaining local resolved status "${localCount.status}" for count #${docId} over stale remote "${data.status}".`);
+                    continue;
+                  }
+                }
+              } catch (_) {}
             }
 
             if (table === 'settings' && docId === 'exchange_rate') {

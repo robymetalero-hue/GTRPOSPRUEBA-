@@ -7806,9 +7806,12 @@ DIRECTIVAS CRÍTICAS:
         ORDER BY ici.id ASC
       `).all(id) as any[];
 
-      // Ocultar stock del sistema SIEMPRE que sea una sesión MODO A CIEGAS y quien consulta no sea Administrador/Propietario (o vista explícita de auditor), sin importar el estado
+      // Ocultar stock del sistema:
+      // 1. SIEMPRE en sesiones MODO A CIEGAS mientras la sesión esté activa (en_progreso o pausada) - incluso para admin, para que el conteo físico sea 100% ciego e imparcial.
+      // 2. SIEMPRE para personal no-administrador (cajeros, vendedores, vista kiosco/auditor) en CUALQUIER estado.
       const isBlindSession = count.mode === 'BLIND';
-      const hideSystemStock = isBlindSession && (!isAdmin || isAuditorView);
+      const isCountActive = count.status === 'en_progreso' || count.status === 'pausado';
+      const hideSystemStock = (isBlindSession && isCountActive) || (!isAdmin || isAuditorView);
 
       if (hideSystemStock) {
         items = items.map((it: any) => ({
@@ -8109,6 +8112,12 @@ DIRECTIVAS CRÍTICAS:
         console.warn("[Audit Error] Failed to log count status change:", auditErr.message);
       }
 
+      try {
+        syncAfterWrite({ inventory_counts: [Number(id)] });
+      } catch (syncErr: any) {
+        console.warn("[Sync Warning] Could not sync inventory_counts status update:", syncErr.message);
+      }
+
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -8232,7 +8241,7 @@ DIRECTIVAS CRÍTICAS:
       });
 
       transaction();
-      syncAfterWrite(["products", "inventory_audit_logs"]);
+      syncAfterWrite(["products", "inventory_audit_logs", "inventory_counts"]);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

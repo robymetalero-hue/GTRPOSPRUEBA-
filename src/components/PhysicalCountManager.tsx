@@ -94,8 +94,8 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const [segregationWarning, setSegregationWarning] = useState<string | null>(null);
   const [isSessionSanitized, setIsSessionSanitized] = useState<boolean>(false);
 
-  // Modo a ciegas activo de forma estricta (no revela stock al personal/kiosco)
-  const isBlindActive = (activeSession?.mode === 'BLIND' && !isAdmin) || isSessionSanitized;
+  // Modo a ciegas activo de forma estricta (no revela stock al personal/kiosco ni al admin si la sesión es BLIND)
+  const isBlindActive = activeSession?.mode === 'BLIND' || !isAdmin || isSessionSanitized || externalViewMode === 'blind';
 
   // Filtros del listado de conteo activo
   const [itemSearch, setItemSearch] = useState('');
@@ -1792,8 +1792,8 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                                 {it.product_name}
                               </h3>
 
-                              {/* Existencias POS y Discrepancias (SOLO EN MODO STANDARD) */}
-                              {showStock && sysStock !== undefined && (
+                              {/* Existencias POS y Discrepancias (ESTRICTAMENTE PROHIBIDO EN MODO A CIEGAS) */}
+                              {!isBlindActive && showStock && sysStock !== undefined && (
                                 <div className="flex items-center gap-2.5 font-mono text-[10px] sm:text-xs">
                                   <span className="text-slate-500 dark:text-slate-400 font-medium">
                                     Stock POS: <strong className="text-slate-900 dark:text-white font-bold">{sysStock} u</strong>
@@ -1816,8 +1816,8 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                             {/* Controles de Conteo */}
                             <div className="flex items-center justify-between sm:justify-end gap-1.5 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800/80">
                               
-                              {/* Botón Rápido = POS (Solo visible si showStock) */}
-                              {showStock && sysStock !== undefined && (
+                              {/* Botón Rápido = POS (PROHIBIDO EN MODO A CIEGAS) */}
+                              {!isBlindActive && showStock && sysStock !== undefined && (
                                 <button
                                   type="button"
                                   onClick={() => handleSetStockToSystem(it)}

@@ -212,13 +212,51 @@ const InventorySearchInput = React.memo(({
 export default function Inventory() {
     const { 
         products, fetchProducts, user, exchangeRate, roundBs, departments, fetchDepartments, view,
-        hasMoreProducts, loadMoreProducts, inventoryLock
+        hasMoreProducts, loadMoreProducts, inventoryLock, fetchInventoryLockStatus
     } = useAppContext();
     const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
     const elasticScroll = useElasticScroll(true);
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
     const [isPhysicalCountOpen, setIsPhysicalCountOpen] = useState(false);
+
+    const handleQuickUnlockInventory = async () => {
+        if (!inventoryLock?.activeCount?.id) return;
+        if (!confirm(`¿Deseas cancelar y desbloquear el Control Físico de Inventario #${inventoryLock.activeCount.id}? Esto liberará de inmediato el inventario y permitirá volver a registrar entradas de mercadería y ventas con normalidad.`)) {
+            return;
+        }
+        try {
+            const res = await fetch(`/api/inventory-counts/${inventoryLock.activeCount.id}/status`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-user-role': user?.role || ''
+                },
+                body: JSON.stringify({ 
+                    status: 'cancelado',
+                    notes: `Cancelado directamente por el administrador (${user?.username || 'admin'}) para liberar inventario.`
+                })
+            });
+            if (res.ok) {
+                showNotification("✓ Control físico cancelado con éxito. Inventario y ventas desbloqueados.", "success");
+                safeDispatchEvent('inventory_operation', {
+                    detail: {
+                        type: 'physical_count_cancelled',
+                        id: inventoryLock.activeCount.id,
+                        user: user?.username || 'admin',
+                        timestamp: new Date().toISOString()
+                    }
+                });
+                fetchInventoryLockStatus?.();
+                fetchProducts?.();
+            } else {
+                const err = await res.json();
+                showNotification(`Error al liberar: ${err.error || 'Error desconocido'}`, "error");
+            }
+        } catch (e: any) {
+            showNotification("Fallo de conexión al intentar liberar el inventario.", "error");
+        }
+    };
 
     // CSV Bulk Import states
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -831,7 +869,10 @@ export default function Inventory() {
                 loadArrivalHistory();
             } else {
                 const err = await res.json();
-                showNotification(`Error: ${err.error}`, "error");
+                const friendlyMsg = err.message || (err.error === 'INVENTORY_COUNT_ACTIVE' 
+                    ? `No se puede ingresar mercancía: Existe un Control Físico de Inventario activo (#${inventoryLock.activeCount?.id || ''}). Finaliza o cancela el control para habilitar el ingreso de stock.`
+                    : (err.error || 'Error al procesar la entrada de stock'));
+                showNotification(friendlyMsg, "error");
             }
         } catch (err) {
             console.error(err);
@@ -1468,13 +1509,26 @@ export default function Inventory() {
                             </span>
                         </div>
                     </div>
-                    <button
-                        type="button"
-                        onClick={() => setIsPhysicalCountOpen(true)}
-                        className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition shrink-0 cursor-pointer shadow-sm"
-                    >
-                        Gestionar Control
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                        <button
+                            type="button"
+                            onClick={() => setIsPhysicalCountOpen(true)}
+                            className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition shrink-0 cursor-pointer shadow-sm"
+                        >
+                            Gestionar Control
+                        </button>
+                        {user?.role === 'admin' && (
+                            <button
+                                type="button"
+                                onClick={handleQuickUnlockInventory}
+                                className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition shrink-0 cursor-pointer shadow-sm flex items-center gap-1"
+                                title="Cancelar el control físico actual y desbloquear inmediatamente el inventario"
+                            >
+                                <X size={13} />
+                                <span>Liberar Inventario</span>
+                            </button>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -1542,8 +1596,13 @@ export default function Inventory() {
                                     }}
                                     className="py-2.5 px-4.5 bg-indigo-600 hover:bg-indigo-500 hover:scale-[1.01] active:scale-95 text-white font-extrabold text-xs rounded-2xl shadow-md shadow-indigo-550/10 border border-indigo-550 transition-all cursor-pointer flex items-center gap-1.5"
                                 >
-                                    <ArrowUpRight size={14} className="animate-pulse" />
+                                    <ArrowUpRight size={14} className={inventoryLock?.isLocked ? "text-amber-300" : "animate-pulse"} />
                                     <span>Entrada de Stock (Rápido)</span>
+                                    {inventoryLock?.isLocked && (
+                                        <span className="px-1.5 py-0.2 bg-amber-500/20 text-amber-200 border border-amber-400/40 rounded text-[8.5px] font-black uppercase">
+                                            Pausado
+                                        </span>
+                                    )}
                                 </button>
                                 <button 
                                     onClick={() => setIsPhysicalCountOpen(true)}
@@ -1665,6 +1724,32 @@ export default function Inventory() {
                         <div className="flex-grow overflow-y-auto pr-1">
                             {activeModalTab === 'form' ? (
                                 <div className="flex flex-col gap-4">
+                                    {/* ALERTA SI HAY CONTROL FÍSICO ACTIVO */}
+                                    {inventoryLock?.isLocked && (
+                                        <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-800 dark:text-amber-300 text-xs animate-in fade-in">
+                                            <div className="flex items-center gap-2">
+                                                <AlertTriangle size={16} className="text-amber-500 shrink-0" />
+                                                <div>
+                                                    <span className="font-bold block uppercase tracking-wider text-[10px]">
+                                                        Control Físico en Curso (#{inventoryLock.activeCount?.id})
+                                                    </span>
+                                                    <span className="text-[11px] opacity-90 block">
+                                                        Las entradas de mercancía están pausadas para no desfasar la auditoría física.
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            {user?.role === 'admin' && (
+                                                <button
+                                                    type="button"
+                                                    onClick={handleQuickUnlockInventory}
+                                                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition shrink-0 cursor-pointer shadow-xs"
+                                                >
+                                                    Liberar Inventario
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+
                                     {/* Product Searcher (with clean autocomplete input and select feedback) */}
                                     <div className="flex flex-col gap-1.5 relative">
                                         <label className="text-[9px] font-extrabold uppercase tracking-widest text-slate-400">Buscar Producto Existente *</label>
@@ -1847,10 +1932,23 @@ export default function Inventory() {
                                         {/* Submit button */}
                                         <button
                                             type="submit"
-                                            disabled={isSubmittingStockIn || !selectedProductForStockIn || !stockInQuantity}
-                                            className="w-full mt-2 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-extrabold text-xs rounded-xl shadow-lg transition duration-150 cursor-pointer text-center flex items-center justify-center gap-1.5"
+                                            disabled={isSubmittingStockIn || !selectedProductForStockIn || !stockInQuantity || inventoryLock?.isLocked}
+                                            className={`w-full mt-2 py-3 font-extrabold text-xs rounded-xl shadow-lg transition duration-150 text-center flex items-center justify-center gap-1.5 select-none ${
+                                                inventoryLock?.isLocked 
+                                                    ? 'bg-amber-600/80 text-white cursor-not-allowed opacity-80' 
+                                                    : 'bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white cursor-pointer'
+                                            }`}
                                         >
-                                            {isSubmittingStockIn ? "Guardando lote..." : "Ingresar Unidades al Inventario"}
+                                            {isSubmittingStockIn ? (
+                                                "Guardando lote..."
+                                            ) : inventoryLock?.isLocked ? (
+                                                <>
+                                                    <AlertTriangle size={14} />
+                                                    <span>Pausado por Control Físico Activo (#{inventoryLock.activeCount?.id})</span>
+                                                </>
+                                            ) : (
+                                                "Ingresar Unidades al Inventario"
+                                            )}
                                         </button>
                                     </form>
                                 </div>
