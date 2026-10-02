@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { jsPDF } from 'jspdf';
 import { useAppContext } from '../context/AppContext';
 import { safeDispatchEvent } from '../utils/events';
 import { hasPermission } from '../utils/permissions';
@@ -6,7 +7,7 @@ import {
   ClipboardCheck, CheckCircle, AlertTriangle, Play, X, 
   Eye, RefreshCw, Search, Check, ChevronLeft, 
   ShieldCheck, FileText, Zap, History, ListCheck, CheckCheck,
-  Package, AlertCircle
+  Package, AlertCircle, Download, Printer
 } from 'lucide-react';
 
 interface PhysicalCountManagerProps {
@@ -51,6 +52,7 @@ interface CountItem {
   status: string;
   notes?: string | null;
   recount_requested?: number;
+  had_movements_during_count?: number;
 }
 
 export default function PhysicalCountManager({ onClose, externalViewMode, embeddedMode = false }: PhysicalCountManagerProps) {
@@ -90,13 +92,29 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const [overrideSegregation, setOverrideSegregation] = useState<boolean>(false);
   const [overrideReason, setOverrideReason] = useState<string>('');
   const [segregationWarning, setSegregationWarning] = useState<string | null>(null);
+  const [isSessionSanitized, setIsSessionSanitized] = useState<boolean>(false);
+
+  // Modo a ciegas activo de forma estricta (no revela stock al personal/kiosco)
+  const isBlindActive = (activeSession?.mode === 'BLIND' && !isAdmin) || isSessionSanitized;
 
   // Filtros del listado de conteo activo
   const [itemSearch, setItemSearch] = useState('');
-  const [activeFilter, setActiveFilter] = useState<'todos' | 'pendientes' | 'revisados' | 'diferencias'>('todos');
+  const [activeFilter, setActiveFilter] = useState<'todos' | 'pendientes' | 'revisados' | 'diferencias' | 'reconteo'>('todos');
+  const [adminReviewFilter, setAdminReviewFilter] = useState<'todos' | 'diferencias' | 'coincidentes'>('todos');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('ALL');
   const [stockSection, setStockSection] = useState<'with_stock' | 'zero_stock'>('with_stock');
-  const [historicStockFilter, setHistoricStockFilter] = useState<'all' | 'with_stock' | 'zero_stock'>('all');
+  const [historicStockFilter, setHistoricStockFilter] = useState<'all' | 'with_stock' | 'zero_stock' | 'diferencias' | 'coincidentes'>('all');
+  const [selectedRecountIds, setSelectedRecountIds] = useState<number[]>([]);
+
+  // Sincronizar automáticamente selección de reconteo con los artículos que tienen diferencias
+  useEffect(() => {
+    if (activeSession && (activeSession.status === 'completado' || activeSession.status === 'finalizado')) {
+      const diffIds = sessionItems
+        .filter(it => it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0))
+        .map(it => it.id);
+      setSelectedRecountIds(diffIds);
+    }
+  }, [activeSession?.id, activeSession?.status, sessionItems.length]);
 
   // Modal / Detalle de sesión histórica
   const [selectedHistoricCount, setSelectedHistoricCount] = useState<InventoryCount | null>(null);
@@ -189,12 +207,31 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
       if (res.ok) {
         const data = await res.json();
         const isSanitized = data.is_blind_sanitized === true;
+        if (!isHistoric) {
+          setIsSessionSanitized(isSanitized);
+        }
 
         const mapItems = (items: any[]) => items.map(it => {
           const prodObj = products?.find(p => p.id === it.product_id);
-          const liveStock = prodObj?.stock !== undefined ? prodObj.stock : (it.live_stock ?? it.expected_quantity ?? 0);
           const physicalQty = it.physical_quantity ?? 0;
-          const isChecked = it.status !== 'pendiente' ? 1 : 0;
+          const isChecked = (it.status !== 'pendiente' && it.status !== 'requiere_revision' && !it.recount_requested) ? 1 : 0;
+
+          if (isSanitized) {
+            return {
+              ...it,
+              product_name: prodObj?.name || it.product_name,
+              product_sku: prodObj?.sku || it.product_sku || 'N/A',
+              product_category: prodObj?.category || it.product_category || 'General',
+              system_stock: undefined,
+              live_stock: undefined,
+              counted_stock: physicalQty,
+              difference: undefined,
+              is_checked: isChecked,
+              status: it.status || 'pendiente'
+            };
+          }
+
+          const liveStock = prodObj?.stock !== undefined ? prodObj.stock : (it.live_stock ?? it.expected_quantity ?? 0);
           const diff = physicalQty - liveStock;
 
           return {
@@ -202,10 +239,10 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
             product_name: prodObj?.name || it.product_name,
             product_sku: prodObj?.sku || it.product_sku || 'N/A',
             product_category: prodObj?.category || it.product_category || 'General',
-            system_stock: isSanitized ? undefined : liveStock,
+            system_stock: liveStock,
             live_stock: liveStock,
             counted_stock: physicalQty,
-            difference: isSanitized ? 0 : diff,
+            difference: diff,
             is_checked: isChecked,
             status: it.status || 'pendiente'
           };
@@ -304,16 +341,16 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     const nextChecked = updatedFields.is_checked !== undefined ? updatedFields.is_checked : item.is_checked;
     const nextStatus = updatedFields.status !== undefined ? updatedFields.status : (nextChecked === 0 ? 'pendiente' : 'contado');
 
-    const sysStock = item.system_stock ?? item.live_stock ?? 0;
-    const diff = newStock - sysStock;
+    const diff = item.system_stock !== undefined ? newStock - item.system_stock : undefined;
 
     // Actualización optimista inmediata
     setSessionItems(prev => prev.map(it => it.id === itemId ? { 
       ...it, 
       counted_stock: newStock,
-      is_checked: nextStatus !== 'pendiente' ? 1 : 0,
+      is_checked: nextChecked,
       status: nextStatus,
       difference: diff,
+      recount_requested: 0,
       notes: updatedFields.notes !== undefined ? updatedFields.notes : it.notes
     } : it));
 
@@ -340,16 +377,20 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
   const handleToggleCheck = async (item: CountItem) => {
     const isChecked = item.is_checked === 1;
-    const nextChecked = isChecked ? 0 : 1;
-    await handleUpdateItem(item.id, { is_checked: nextChecked });
+    if (isChecked) {
+      await handleUpdateItem(item.id, { is_checked: 0, status: 'pendiente' });
+    } else {
+      await handleUpdateItem(item.id, { is_checked: 1, status: 'contado' });
+    }
   };
 
   const handleSetStockToSystem = async (item: CountItem) => {
-    const sys = item.system_stock ?? item.live_stock ?? 0;
-    await handleUpdateItem(item.id, { counted_stock: sys, is_checked: 1 });
+    if (item.system_stock === undefined || isBlindActive) return;
+    await handleUpdateItem(item.id, { counted_stock: item.system_stock, is_checked: 1, status: 'contado' });
   };
 
   const handleMatchAllPending = async () => {
+    if (isBlindActive || !activeSummary.hasAdminVisibility) return;
     const targetItems = stockSection === 'with_stock' ? itemsWithStock : currentSectionItems;
     const pending = targetItems.filter(it => it.is_checked === 0);
     if (pending.length === 0) {
@@ -360,8 +401,9 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     
     setIsLoading(true);
     for (const item of pending) {
-      const sys = item.system_stock ?? item.live_stock ?? 0;
-      await handleUpdateItem(item.id, { counted_stock: sys, is_checked: 1 });
+      if (item.system_stock !== undefined) {
+        await handleUpdateItem(item.id, { counted_stock: item.system_stock, is_checked: 1, status: 'contado' });
+      }
     }
     setIsLoading(false);
     showNotification?.("✓ Todos los productos pendientes de esta sección han sido verificados con el stock del sistema.", "success");
@@ -371,13 +413,14 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     if (!activeSession) return;
     setIsLoading(true);
     try {
-      // Auto-confirmar como 0 cualquier producto del apartado de stock 0 que no haya sido editado
-      const uncountedZeroItems = sessionItems.filter(it => (it.system_stock ?? it.live_stock ?? 0) <= 0 && it.is_checked === 0);
-      for (const zItem of uncountedZeroItems) {
-        await handleUpdateItem(zItem.id, { counted_stock: 0, is_checked: 1 });
+      // Si estamos en modo visible para admin, auto-confirmar productos de stock 0 sin movimiento
+      if (activeSummary.hasAdminVisibility && !isBlindActive) {
+        const uncountedZeroItems = sessionItems.filter(it => (it.system_stock ?? 0) <= 0 && it.is_checked === 0);
+        for (const zItem of uncountedZeroItems) {
+          await handleUpdateItem(zItem.id, { counted_stock: 0, is_checked: 1, status: 'contado' });
+        }
       }
 
-      const targetStatus = isAdmin ? 'cerrado' : 'completado';
       const res = await fetch(`/api/inventory-counts/${activeSession.id}/status`, {
         method: 'PUT',
         headers: { 
@@ -385,15 +428,15 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
           'x-user-role': user?.role || ''
         },
         body: JSON.stringify({ 
-          status: targetStatus,
-          auto_apply: isAdmin
+          status: 'completado',
+          auto_apply: false // NUNCA auto-aplicar al enviar; la aprobación debe ser explícita
         })
       });
 
       if (res.ok) {
         showNotification?.(
           isAdmin 
-            ? "✓ Control físico completado y ajustado directamente en el inventario de productos."
+            ? "✓ Conteo físico completado. Revisa las diferencias antes de conciliar."
             : "✓ Conteo físico finalizado. Reporte enviado a Administración.", 
           "success"
         );
@@ -463,6 +506,59 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     }
   };
 
+  const handleRequestRecount = async () => {
+    if (!activeSession) return;
+    const discrepancyItems = sessionItems.filter(it => it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0));
+    const targetIds = selectedRecountIds.length > 0 
+      ? selectedRecountIds 
+      : discrepancyItems.map(it => it.id);
+
+    if (targetIds.length === 0) {
+      showNotification?.("Selecciona al menos un producto para solicitar reconteo.", "info");
+      return;
+    }
+
+    if (!confirm(`¿Solicitar reconteo físico de los ${targetIds.length} productos seleccionados? La sesión volverá a estar disponible para el personal con aviso de verificación.`)) {
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const res = await fetch(`/api/inventory-counts/${activeSession.id}/recount`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-role': user?.role || ''
+        },
+        body: JSON.stringify({
+          item_ids: targetIds,
+          reason: 'Diferencia detectada en revisión administrativa'
+        })
+      });
+
+      if (res.ok) {
+        showNotification?.(`✓ Reconteo solicitado para ${targetIds.length} artículos. Sesión reabierta para el personal.`, "success");
+        await fetchActiveSession();
+        safeDispatchEvent('inventory_operation', {
+          detail: {
+            type: 'recount_requested',
+            id: activeSession.id,
+            user: user?.username || 'admin',
+            timestamp: new Date().toISOString()
+          }
+        });
+      } else {
+        const err = await res.json();
+        showNotification?.(`Error al solicitar reconteo: ${err.error || 'Error desconocido'}`, "error");
+      }
+    } catch (e: any) {
+      console.error(e);
+      showNotification?.("Error de conexión al solicitar reconteo.", "error");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleCancelSession = async () => {
     if (!activeSession) return;
     if (!confirm("¿Está seguro que desea cancelar esta sesión de control físico? Los cambios no guardados se descartarán.")) return;
@@ -477,11 +573,21 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         body: JSON.stringify({ status: 'cancelado' })
       });
       if (res.ok) {
-        showNotification?.("Sesión de auditoría cancelada.", "info");
+        showNotification?.("Sesión de auditoría cancelada e inventario liberado.", "info");
         setActiveSession(null);
         setSessionItems([]);
         await fetchActiveSession();
         await fetchHistory();
+        await fetchProducts();
+
+        safeDispatchEvent('inventory_operation', {
+          detail: {
+            type: 'physical_count_cancelled',
+            id: activeSession.id,
+            user: user?.username || 'admin',
+            timestamp: new Date().toISOString()
+          }
+        });
       }
     } catch (err) {
       console.error(err);
@@ -495,23 +601,270 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     fetchSessionItems(count.id, true);
   };
 
+  const exportCountToPDF = (count: InventoryCount, items: CountItem[]) => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const pageWidth = doc.internal.pageSize.getWidth();
+      let y = 15;
+
+      // Header Banner
+      doc.setFillColor(30, 41, 59); // slate-800
+      doc.rect(10, y, pageWidth - 20, 24, 'F');
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(13);
+      doc.setFont('helvetica', 'bold');
+      doc.text("INFORME DE CONTROL FÍSICO DE INVENTARIO", 15, y + 9);
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Folio Auditoría: #${count.id} | Modo: ${count.mode === 'BLIND' ? 'Auditoría a Ciegas' : 'Auditoría Visible'}`, 15, y + 16);
+      doc.text(`Fecha Emisión: ${new Date().toLocaleString()}`, pageWidth - 15, y + 16, { align: 'right' });
+
+      y += 29;
+
+      // Metadata Grid Box
+      doc.setFillColor(248, 250, 252); // slate-50
+      doc.setDrawColor(226, 232, 240); // slate-200
+      doc.roundedRect(10, y, pageWidth - 20, 27, 2, 2, 'FD');
+
+      doc.setTextColor(51, 65, 85);
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'bold');
+
+      doc.text("Almacén / Sucursal:", 14, y + 6.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(count.store_name || "Almacén Principal", 55, y + 6.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text("Auditor Operativo:", 14, y + 12.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(count.auditor_name || count.username || "Personal Almacén", 55, y + 12.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text("Supervisor Aprobador:", 14, y + 18.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(count.approved_by_username || "Administrador", 55, y + 18.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text("Fecha Inicio:", 115, y + 6.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(new Date(count.started_at || count.created_at).toLocaleString(), 145, y + 6.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text("Fecha Cierre:", 115, y + 12.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(count.completed_at || count.approved_at ? new Date(count.completed_at || count.approved_at!).toLocaleString() : 'En Proceso', 145, y + 12.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text("Estado Final:", 115, y + 18.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text((count.status === 'cerrado' || count.status === 'aprobado' ? 'CONCILIADO Y CERRADO' : count.status.toUpperCase()), 145, y + 18.5);
+
+      y += 32;
+
+      // Executive Summary Metrics Box
+      const total = items.length;
+      const correct = items.filter(it => it.counted_stock === (it.system_stock ?? it.live_stock ?? 0)).length;
+      const withDiff = items.filter(it => it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0)).length;
+      const netUnits = items.reduce((sum, it) => sum + ((it.counted_stock ?? 0) - (it.system_stock ?? it.live_stock ?? 0)), 0);
+
+      doc.setFillColor(241, 245, 249);
+      doc.rect(10, y, pageWidth - 20, 12, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(30, 41, 59);
+
+      const colW = (pageWidth - 20) / 4;
+      doc.text(`Total Productos: ${total}`, 10 + colW * 0.2, y + 7.5);
+      doc.setTextColor(16, 185, 129); // green
+      doc.text(`Coincidentes: ${correct}`, 10 + colW * 1.2, y + 7.5);
+      doc.setTextColor(withDiff > 0 ? 225 : 100, withDiff > 0 ? 29 : 116, withDiff > 0 ? 72 : 139);
+      doc.text(`Con Diferencias: ${withDiff}`, 10 + colW * 2.2, y + 7.5);
+      doc.setTextColor(netUnits < 0 ? 225 : 79, netUnits < 0 ? 29 : 70, netUnits < 0 ? 72 : 229);
+      doc.text(`Dif. Neta: ${netUnits > 0 ? '+' : ''}${netUnits} u`, 10 + colW * 3.2, y + 7.5);
+
+      y += 18;
+
+      // Table Header
+      doc.setFillColor(71, 85, 105);
+      doc.rect(10, y, pageWidth - 20, 6.5, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'bold');
+
+      doc.text("SKU", 12, y + 4.5);
+      doc.text("DESCRIPCIÓN DEL ARTÍCULO", 42, y + 4.5);
+      doc.text("POS", 125, y + 4.5, { align: 'right' });
+      doc.text("FÍSICO", 147, y + 4.5, { align: 'right' });
+      doc.text("DIFERENCIA", 172, y + 4.5, { align: 'right' });
+      doc.text("ESTADO", 195, y + 4.5, { align: 'right' });
+
+      y += 6.5;
+
+      // Table Rows
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        const sys = it.system_stock ?? it.live_stock ?? 0;
+        const physical = it.counted_stock ?? 0;
+        const diff = physical - sys;
+
+        if (y > 275) {
+          doc.addPage();
+          y = 15;
+          doc.setFillColor(71, 85, 105);
+          doc.rect(10, y, pageWidth - 20, 6.5, 'F');
+          doc.setTextColor(255, 255, 255);
+          doc.setFontSize(7.5);
+          doc.setFont('helvetica', 'bold');
+          doc.text("SKU", 12, y + 4.5);
+          doc.text("DESCRIPCIÓN DEL ARTÍCULO", 42, y + 4.5);
+          doc.text("POS", 125, y + 4.5, { align: 'right' });
+          doc.text("FÍSICO", 147, y + 4.5, { align: 'right' });
+          doc.text("DIFERENCIA", 172, y + 4.5, { align: 'right' });
+          doc.text("ESTADO", 195, y + 4.5, { align: 'right' });
+          y += 6.5;
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7);
+        }
+
+        if (i % 2 === 1) {
+          doc.setFillColor(248, 250, 252);
+          doc.rect(10, y, pageWidth - 20, 5.5, 'F');
+        }
+
+        doc.setTextColor(71, 85, 105);
+        doc.text(String(it.product_sku || '-').substring(0, 14), 12, y + 3.8);
+
+        const truncName = String(it.product_name || 'Sin Nombre').substring(0, 48);
+        doc.text(truncName, 42, y + 3.8);
+
+        doc.text(String(sys), 125, y + 3.8, { align: 'right' });
+        doc.text(String(physical), 147, y + 3.8, { align: 'right' });
+
+        if (diff === 0) {
+          doc.setTextColor(16, 185, 129);
+          doc.text("0 u", 172, y + 3.8, { align: 'right' });
+          doc.text("COINCIDE", 195, y + 3.8, { align: 'right' });
+        } else if (diff > 0) {
+          doc.setTextColor(79, 70, 229);
+          doc.text(`+${diff} u`, 172, y + 3.8, { align: 'right' });
+          doc.text("SOBRANTE", 195, y + 3.8, { align: 'right' });
+        } else {
+          doc.setTextColor(225, 29, 72);
+          doc.text(`${diff} u`, 172, y + 3.8, { align: 'right' });
+          doc.text("FALTANTE", 195, y + 3.8, { align: 'right' });
+        }
+
+        y += 5.5;
+      }
+
+      // Footer sign off
+      if (y > 250) {
+        doc.addPage();
+        y = 20;
+      } else {
+        y += 12;
+      }
+
+      doc.setDrawColor(203, 213, 225);
+      doc.line(20, y + 15, 80, y + 15);
+      doc.line(pageWidth - 80, y + 15, pageWidth - 20, y + 15);
+
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text("Firma Auditor Responsable", 50, y + 20, { align: 'center' });
+      doc.text("Firma Administración / Visto Bueno", pageWidth - 50, y + 20, { align: 'center' });
+
+      doc.save(`auditoria_inventario_${count.id}_${new Date().toISOString().slice(0, 10)}.pdf`);
+      showNotification?.("✓ Informe PDF de auditoría descargado.", "success");
+    } catch (e: any) {
+      console.error("PDF Export Error:", e);
+      showNotification?.("Error al exportar PDF de auditoría.", "error");
+    }
+  };
+
+  const exportCountToCsv = (count: InventoryCount, items: CountItem[]) => {
+    try {
+      const headers = [
+        "Folio Conteo",
+        "Almacén",
+        "ID Producto",
+        "Nombre Producto",
+        "SKU",
+        "Categoría",
+        "Stock POS (Snapshot)",
+        "Conteo Físico",
+        "Diferencia",
+        "Estado",
+        "Reconteo",
+        "Movimiento Durante Conteo"
+      ];
+
+      const rows = items.map(it => {
+        const sys = it.system_stock ?? it.live_stock ?? 0;
+        const physical = it.counted_stock ?? 0;
+        const diff = physical - sys;
+        return [
+          count.id,
+          `"${(count.store_name || 'Almacén Principal').replace(/"/g, '""')}"`,
+          it.product_id,
+          `"${(it.product_name || '').replace(/"/g, '""')}"`,
+          `"${(it.product_sku || '').replace(/"/g, '""')}"`,
+          `"${(it.product_category || '').replace(/"/g, '""')}"`,
+          sys,
+          physical,
+          diff,
+          diff === 0 ? "COINCIDE" : diff > 0 ? "SOBRANTE" : "FALTANTE",
+          it.recount_requested ? "SI" : "NO",
+          it.had_movements_during_count ? "SI" : "NO"
+        ].join(",");
+      });
+
+      const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\r\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `auditoria_inventario_${count.id}_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showNotification?.("✓ Archivo CSV de auditoría descargado.", "success");
+    } catch (e: any) {
+      console.error("CSV Export Error:", e);
+      showNotification?.("Error al exportar CSV.", "error");
+    }
+  };
+
   // Resumen y métricas
   const getDiscrepancySummary = (itemsList: CountItem[]) => {
     const totalItems = itemsList.length;
-    const checkedItems = itemsList.filter(it => it.is_checked === 1).length;
-    // Solo los artículos con stock real positivo en sistema son de verificación obligatoria para cerrar la sesión
-    const pendingWithStock = itemsList.filter(it => (it.system_stock ?? it.live_stock ?? 0) > 0 && it.is_checked === 0).length;
-    const pendingItems = pendingWithStock;
+    const checkedItems = itemsList.filter(it => it.is_checked === 1 && it.status !== 'requiere_revision' && !it.recount_requested).length;
     
+    // Visibilidad de stock teórico solo si hay system_stock y la sesión NO está en modo BLIND estricto
     const itemsWithSysStock = itemsList.filter(it => it.system_stock !== undefined);
-    const hasAdminVisibility = itemsWithSysStock.length > 0;
+    const hasAdminVisibility = itemsWithSysStock.length > 0 && !isBlindActive;
+
+    const pendingItems = hasAdminVisibility
+      ? itemsList.filter(it => ((it.system_stock ?? 0) > 0 && (it.is_checked === 0 || it.status === 'pendiente')) || it.status === 'requiere_revision' || Boolean(it.recount_requested)).length
+      : itemsList.filter(it => it.is_checked === 0 || it.status === 'pendiente' || it.status === 'requiere_revision' || Boolean(it.recount_requested)).length;
 
     const productsWithDiff = hasAdminVisibility 
-      ? itemsList.filter(it => it.is_checked === 1 && it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0)).length
+      ? itemsList.filter(it => it.is_checked === 1 && it.system_stock !== undefined && it.counted_stock !== it.system_stock).length
       : 0;
 
     const totalSystemStock = hasAdminVisibility
-      ? itemsList.reduce((sum, it) => sum + (it.system_stock ?? it.live_stock ?? 0), 0)
+      ? itemsList.reduce((sum, it) => sum + (it.system_stock ?? 0), 0)
       : 0;
 
     const totalCountedStock = itemsList.reduce((sum, it) => sum + (it.is_checked === 1 ? it.counted_stock : 0), 0);
@@ -531,15 +884,20 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     };
   };
 
-  const activeSummary = useMemo(() => getDiscrepancySummary(sessionItems), [sessionItems]);
+  const activeSummary = useMemo(() => getDiscrepancySummary(sessionItems), [sessionItems, isBlindActive]);
+
+  const recountItemsCount = useMemo(() => {
+    return sessionItems.filter(it => it.recount_requested === 1 || it.status === 'requiere_revision').length;
+  }, [sessionItems]);
 
   // Separación clara de productos: Con existencias (>0) vs Apartado Especial Stock 0 (<=0)
+  // En MODO BLIND: NO SE SEPARA, para no revelar la existencia teórica al auditor
   const { itemsWithStock, itemsZeroStock } = useMemo(() => {
     const withStock: CountItem[] = [];
     const zeroStock: CountItem[] = [];
     for (const it of sessionItems) {
-      const stock = it.system_stock ?? it.live_stock ?? 0;
-      if (stock > 0) {
+      const stock = it.system_stock;
+      if (stock !== undefined && stock > 0) {
         withStock.push(it);
       } else {
         zeroStock.push(it);
@@ -548,8 +906,10 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     return { itemsWithStock: withStock, itemsZeroStock: zeroStock };
   }, [sessionItems]);
 
-  // Selección de la lista a mostrar según el apartado activo
-  const currentSectionItems = stockSection === 'with_stock' ? itemsWithStock : itemsZeroStock;
+  // Selección de la lista a mostrar según el apartado activo (en BLIND siempre es la lista completa)
+  const currentSectionItems = (isBlindActive || !activeSummary.hasAdminVisibility) 
+    ? sessionItems 
+    : (stockSection === 'with_stock' ? itemsWithStock : itemsZeroStock);
 
   // Lista de categorías únicas presentes en la sección activa
   const activeSessionCategories = useMemo(() => {
@@ -573,18 +933,21 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         matchesFilter = it.is_checked === 0;
       } else if (activeFilter === 'revisados') {
         matchesFilter = it.is_checked === 1;
-      } else if (activeFilter === 'diferencias' && activeSummary.hasAdminVisibility) {
-        matchesFilter = it.is_checked === 1 && it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0);
+      } else if (activeFilter === 'reconteo') {
+        matchesFilter = it.recount_requested === 1 || it.status === 'requiere_revision';
+      } else if (activeFilter === 'diferencias' && activeSummary.hasAdminVisibility && !isBlindActive) {
+        matchesFilter = it.is_checked === 1 && it.system_stock !== undefined && it.counted_stock !== it.system_stock;
       }
 
       const matchesCategory = selectedCategoryFilter === 'ALL' || (it.product_category && it.product_category.toLowerCase() === selectedCategoryFilter.toLowerCase());
 
       return matchesSearch && matchesFilter && matchesCategory;
     });
-  }, [currentSectionItems, itemSearch, activeFilter, selectedCategoryFilter, activeSummary.hasAdminVisibility]);
+  }, [currentSectionItems, itemSearch, activeFilter, selectedCategoryFilter, activeSummary.hasAdminVisibility, isBlindActive]);
 
   // Detección cruzada: si se busca y el producto está en el otro apartado
   const crossSectionMatchesCount = useMemo(() => {
+    if (isBlindActive || !activeSummary.hasAdminVisibility) return 0;
     if (!itemSearch.trim()) return 0;
     const oppositeItems = stockSection === 'with_stock' ? itemsZeroStock : itemsWithStock;
     const cleanQuery = itemSearch.toLowerCase().replace(/^#/, '').trim();
@@ -593,7 +956,18 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
       const searchableText = `${it.product_id || ''} ${(it.product_name || '').toLowerCase()} ${(it.product_sku || '').toLowerCase()} ${(it.product_category || '').toLowerCase()}`;
       return searchTerms.length > 0 && searchTerms.every(term => searchableText.includes(term));
     }).length;
-  }, [itemSearch, stockSection, itemsWithStock, itemsZeroStock]);
+  }, [itemSearch, stockSection, itemsWithStock, itemsZeroStock, isBlindActive, activeSummary.hasAdminVisibility]);
+
+  // Lista de artículos para la revisión del Administrador según el filtro seleccionado
+  const reviewItems = useMemo(() => {
+    if (adminReviewFilter === 'diferencias') {
+      return sessionItems.filter(it => it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0));
+    }
+    if (adminReviewFilter === 'coincidentes') {
+      return sessionItems.filter(it => it.counted_stock === (it.system_stock ?? it.live_stock ?? 0));
+    }
+    return sessionItems;
+  }, [sessionItems, adminReviewFilter]);
 
   return (
     <div 
@@ -813,7 +1187,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
               )}
 
               {/* CASO B: SESIÓN COMPLETADA PENDIENTE DE APROBACIÓN */}
-              {activeSession && activeSession.status === 'completado' && (
+              {activeSession && (activeSession.status === 'completado' || activeSession.status === 'finalizado') && (
                 <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center justify-center">
                   {!isAdmin ? (
                     <div className="bg-white dark:bg-[#11192e] p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl text-center flex flex-col items-center gap-4 max-w-md">
@@ -821,10 +1195,12 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         <CheckCircle size={28} />
                       </div>
                       <h3 className="text-sm font-black text-slate-850 dark:text-white uppercase">
-                        Conteo Finalizado y Enviado
+                        ✓ Conteo Físico Enviado
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                        Tu conteo físico ha sido registrado exitosamente y está listo para la revisión y aprobación por el Administrador.
+                        Tu conteo físico ha sido registrado exitosamente y enviado a Administración.
+                        <br />
+                        <span className="font-semibold text-slate-700 dark:text-slate-300">Pendiente de revisión administrativa.</span>
                       </p>
                       {onClose && (
                         <button
@@ -838,20 +1214,81 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                     </div>
                   ) : (
                     <div className="bg-white dark:bg-[#11192e] p-4 md:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col gap-3 max-w-2xl w-full">
+                      {/* Cabecera de auditoría */}
                       <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
                         <div>
                           <h3 className="text-xs md:text-sm font-black text-slate-800 dark:text-white uppercase tracking-tight">
-                            Reconciliación y Aprobación
+                            Reconciliación y Aprobación de Inventario
                           </h3>
                           <p className="text-[10px] text-slate-500 font-medium">
                             Auditor: <strong className="text-indigo-600 dark:text-indigo-400">{activeSession.auditor_name || activeSession.username}</strong>
+                            {' • '}
+                            <span>{activeSession.store_name || 'Almacén Principal'}</span>
+                            {' • '}
+                            <span className="font-semibold text-slate-600 dark:text-slate-400">
+                              {activeSession.mode === 'BLIND' ? 'Auditoría a Ciegas' : 'Auditoría Visible'}
+                            </span>
                           </p>
                         </div>
-                        <span className="px-2 py-0.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[9px] font-black uppercase rounded-lg border border-amber-500/20">
-                          Pendiente Aprobación
-                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => exportCountToCsv(activeSession, sessionItems)}
+                            className="px-2 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-[10px] font-bold uppercase transition cursor-pointer flex items-center gap-1 border border-slate-200 dark:border-slate-700"
+                            title="Exportar a CSV"
+                          >
+                            <Download size={11} />
+                            <span>CSV</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => exportCountToPDF(activeSession, sessionItems)}
+                            className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-300 rounded-lg text-[10px] font-bold uppercase transition cursor-pointer flex items-center gap-1 border border-indigo-200/50 dark:border-indigo-800/50"
+                            title="Descargar Informe PDF"
+                          >
+                            <Printer size={11} />
+                            <span>PDF</span>
+                          </button>
+                          <span className="px-2 py-0.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[9px] font-black uppercase rounded-lg border border-amber-500/20">
+                            Pendiente Aprobación
+                          </span>
+                        </div>
                       </div>
 
+                      {/* INFORME AUTOMÁTICO: CASO A (Todo coincide) vs CASO B (Existen diferencias) */}
+                      {activeSummary.productsWithDiff === 0 ? (
+                        /* CASO A: TODO CORRECTO */
+                        <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-500 flex items-center justify-center shrink-0">
+                            <CheckCheck size={22} className="stroke-[2.5]" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-black text-emerald-700 dark:text-emerald-300 uppercase tracking-wide">
+                              ✓ Control Correcto — Sin Diferencias
+                            </h4>
+                            <p className="text-[10px] text-emerald-600/90 dark:text-emerald-400/90 leading-tight">
+                              Todos los artículos contados coinciden con el inventario registrado ({activeSummary.totalItems} de {activeSummary.totalItems} correctos). No se requieren ajustes contables.
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        /* CASO B: CON DISCREPANCIAS */
+                        <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-rose-500/20 text-rose-500 flex items-center justify-center shrink-0">
+                            <AlertTriangle size={22} />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-black text-rose-700 dark:text-rose-300 uppercase tracking-wide">
+                              ⚠️ Control con Discrepancias — Requiere Decisión
+                            </h4>
+                            <p className="text-[10px] text-rose-600/90 dark:text-rose-400/90 leading-tight">
+                              Se detectaron {activeSummary.productsWithDiff} producto(s) con diferencias entre el conteo físico y el sistema. Puedes solicitar un reconteo de estos productos o aprobar el ajuste.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Resumen numérico */}
                       <div className="grid grid-cols-4 gap-2 bg-slate-50 dark:bg-black/30 p-2.5 rounded-xl text-center">
                         <div>
                           <span className="text-[8px] font-black uppercase text-slate-400 block">Total</span>
@@ -875,30 +1312,129 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         </div>
                       </div>
 
-                      <div className="max-h-[260px] overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
-                        {sessionItems.map(it => {
-                          const sys = it.system_stock ?? it.live_stock ?? 0;
-                          const physical = it.counted_stock ?? 0;
-                          const diff = physical - sys;
+                      {/* Filtros de revisión administrativa si hay diferencias */}
+                      {activeSummary.productsWithDiff > 0 && (
+                        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-1.5 flex-wrap gap-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase mr-1">Filtrar:</span>
+                            <button
+                              type="button"
+                              onClick={() => setAdminReviewFilter('todos')}
+                              className={`px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase transition cursor-pointer ${
+                                adminReviewFilter === 'todos' 
+                                  ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900' 
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-slate-800'
+                              }`}
+                            >
+                              Todos ({sessionItems.length})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAdminReviewFilter('diferencias')}
+                              className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase transition cursor-pointer ${
+                                adminReviewFilter === 'diferencias' 
+                                  ? 'bg-rose-600 text-white shadow-xs' 
+                                  : 'bg-rose-500/10 text-rose-600 border border-rose-500/20'
+                              }`}
+                            >
+                              Con Diferencias ({activeSummary.productsWithDiff})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAdminReviewFilter('coincidentes')}
+                              className={`px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase transition cursor-pointer ${
+                                adminReviewFilter === 'coincidentes' 
+                                  ? 'bg-emerald-600 text-white shadow-xs' 
+                                  : 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                              }`}
+                            >
+                              Coincidentes ({sessionItems.length - activeSummary.productsWithDiff})
+                            </button>
+                          </div>
 
-                          return (
-                            <div key={it.id} className="p-2 flex items-center justify-between text-xs gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="font-bold text-slate-800 dark:text-white uppercase truncate text-xs">{it.product_name}</div>
-                                <div className="text-[9px] text-slate-400 font-mono">SKU: {it.product_sku}</div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const diffIds = sessionItems
+                                .filter(it => it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0))
+                                .map(it => it.id);
+                              if (selectedRecountIds.length === diffIds.length) {
+                                setSelectedRecountIds([]);
+                              } else {
+                                setSelectedRecountIds(diffIds);
+                              }
+                            }}
+                            className="text-[10px] font-bold text-purple-600 dark:text-purple-400 hover:underline cursor-pointer ml-auto"
+                          >
+                            {selectedRecountIds.length === activeSummary.productsWithDiff
+                              ? 'Deseleccionar todos'
+                              : `Seleccionar todas las dif. (${activeSummary.productsWithDiff})`}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Lista de productos en revisión */}
+                      <div className="max-h-[240px] overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
+                        {reviewItems.length === 0 ? (
+                          <div className="p-4 text-center text-xs text-slate-400 font-medium">
+                            No hay productos en este filtro.
+                          </div>
+                        ) : (
+                          reviewItems.map(it => {
+                            const sys = it.system_stock ?? it.live_stock ?? 0;
+                            const physical = it.counted_stock ?? 0;
+                            const diff = physical - sys;
+                            const hasDiff = diff !== 0;
+
+                            return (
+                              <div key={it.id} className={`p-2 flex items-center justify-between text-xs gap-2 transition ${
+                                hasDiff ? 'bg-rose-500/5 dark:bg-rose-950/20' : ''
+                              }`}>
+                                {hasDiff && (
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedRecountIds.includes(it.id)}
+                                    onChange={() => {
+                                      setSelectedRecountIds(prev => 
+                                        prev.includes(it.id) ? prev.filter(id => id !== it.id) : [...prev, it.id]
+                                      );
+                                    }}
+                                    title="Marcar para reconteo"
+                                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 border-slate-300 dark:border-slate-700 cursor-pointer shrink-0"
+                                  />
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-bold text-slate-800 dark:text-white uppercase truncate text-xs flex items-center gap-1.5">
+                                    <span className="truncate">{it.product_name}</span>
+                                    {it.had_movements_during_count === 1 && (
+                                      <span className="shrink-0 px-1 py-0.2 bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[8px] font-bold rounded">
+                                        ⚡ Mov. durante conteo
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[9px] text-slate-400 font-mono">
+                                    SKU: {it.product_sku} {it.product_category ? `• ${it.product_category}` : ''}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0 text-right font-mono text-[10px]">
+                                  <span className="text-slate-500">POS: <strong>{sys}</strong></span>
+                                  <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded font-bold text-slate-800 dark:text-white">
+                                    Físico: {physical}
+                                  </span>
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black w-24 text-center ${
+                                    diff === 0 
+                                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' 
+                                      : diff > 0 
+                                        ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20' 
+                                        : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                                  }`}>
+                                    {diff === 0 ? '✓ Coincide' : diff > 0 ? `+${diff} Sobrante` : `${diff} Faltante`}
+                                  </span>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2 shrink-0 text-right font-mono text-[10px]">
-                                <span className="text-slate-500">POS: <strong>{sys}</strong></span>
-                                <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded font-bold text-slate-800 dark:text-white">
-                                  Físico: {physical}
-                                </span>
-                                <span className={`font-black w-12 text-right ${diff === 0 ? 'text-emerald-500' : diff > 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
-                                  {diff === 0 ? '0 u' : diff > 0 ? `+${diff} u` : `${diff} u`}
-                                </span>
-                              </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          })
+                        )}
                       </div>
 
                       <div>
@@ -906,26 +1442,55 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                           type="text"
                           value={adminNotes}
                           onChange={e => setAdminNotes(e.target.value)}
-                          placeholder="Observaciones de conciliación..."
-                          className="w-full p-2 text-xs bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
+                          placeholder="Observaciones de conciliación (opcional)..."
+                          className="w-full p-2 text-xs bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                         />
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2">
+                      {/* Botones de acción según caso */}
+                      <div className="flex items-center gap-2">
                         <button
                           type="button"
                           onClick={handleCancelSession}
-                          className="py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+                          className="px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 font-bold text-xs uppercase rounded-xl transition cursor-pointer shrink-0"
                         >
                           Rechazar
                         </button>
+
+                        {activeSummary.productsWithDiff > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleRequestRecount}
+                            disabled={isLoading || selectedRecountIds.length === 0}
+                            className={`flex-1 py-2 text-white font-black text-xs uppercase rounded-xl transition shadow-md flex items-center justify-center gap-1.5 ${
+                              selectedRecountIds.length === 0
+                                ? 'bg-slate-300 dark:bg-slate-800 text-slate-500 cursor-not-allowed'
+                                : 'bg-purple-600 hover:bg-purple-500 cursor-pointer'
+                            }`}
+                          >
+                            <RefreshCw size={13} className={isLoading ? "animate-spin" : ""} />
+                            <span>Solicitar Reconteo ({selectedRecountIds.length})</span>
+                          </button>
+                        )}
+
                         <button
                           type="button"
                           onClick={handleApproveCount}
                           disabled={isLoading}
-                          className="py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase rounded-xl transition shadow-md cursor-pointer"
+                          className={`flex-1 py-2 text-white font-black text-xs uppercase rounded-xl transition shadow-md cursor-pointer flex items-center justify-center gap-1.5 ${
+                            activeSummary.productsWithDiff === 0
+                              ? 'bg-emerald-600 hover:bg-emerald-500'
+                              : 'bg-indigo-600 hover:bg-indigo-500'
+                          }`}
                         >
-                          {isLoading ? 'Aplicando...' : 'Aprobar y Ajustar Stock'}
+                          <CheckCircle size={14} />
+                          <span>
+                            {isLoading 
+                              ? 'Aplicando...' 
+                              : activeSummary.productsWithDiff === 0 
+                                ? '✓ Aprobar y Liberar Inventario' 
+                                : 'Aprobar Ajustes y Conciliar'}
+                          </span>
                         </button>
                       </div>
                     </div>
@@ -934,9 +1499,28 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
               )}
 
               {/* CASO C: CONTEO FÍSICO ACTIVO - ESPACIO Y SCROLL MÁXIMO */}
-              {activeSession && activeSession.status !== 'completado' && (
+              {activeSession && activeSession.status !== 'completado' && activeSession.status !== 'finalizado' && (
                 <div className="flex-1 flex flex-col h-full overflow-hidden">
                   
+                  {/* ALERTA DE RECONTEO SI FUE SOLICITADO POR ADMINISTRACIÓN */}
+                  {recountItemsCount > 0 && (
+                    <div className="bg-purple-600/10 border-b border-purple-500/30 px-3 py-2 flex items-center justify-between gap-2 text-purple-900 dark:text-purple-300 text-xs">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle size={15} className="text-purple-600 shrink-0" />
+                        <span className="font-bold">
+                          Administración ha solicitado verificar <strong>{recountItemsCount}</strong> artículo(s) con discrepancia.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveFilter('reconteo')}
+                        className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[10px] font-black uppercase tracking-wider transition cursor-pointer shrink-0"
+                      >
+                        Ver para Reconteo
+                      </button>
+                    </div>
+                  )}
+
                   {/* BARRA SUPERIOR DE BÚSQUEDA Y FILTROS INTEGRADA */}
                   <div className="bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-800 px-3 py-2 shrink-0 flex flex-col gap-1.5 z-10">
                     
@@ -978,8 +1562,8 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         </select>
                       )}
 
-                      {/* Botón rápido = Todo al POS para Admin */}
-                      {isAdmin && activeSummary.pendingItems > 0 && (
+                      {/* Botón rápido = Todo al POS para Admin (Solo en modo STANDARD) */}
+                      {isAdmin && !isBlindActive && activeSummary.hasAdminVisibility && activeSummary.pendingItems > 0 && (
                         <button
                           type="button"
                           onClick={handleMatchAllPending}
@@ -993,54 +1577,56 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                       )}
                     </div>
 
-                    {/* Segmented Switcher: Artículos con Stock vs Apartado Stock 0 */}
-                    <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-900/90 rounded-xl border border-slate-200 dark:border-slate-800">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStockSection('with_stock');
-                          setActiveFilter('todos');
-                        }}
-                        className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-[11px] font-black uppercase tracking-wide transition-all cursor-pointer ${
-                          stockSection === 'with_stock'
-                            ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-xs border border-slate-200/80 dark:border-slate-700'
-                            : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
-                        }`}
-                      >
-                        <Package size={13} className="shrink-0" />
-                        <span>Con Existencias</span>
-                        <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
-                          stockSection === 'with_stock'
-                            ? 'bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300'
-                            : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-                        }`}>
-                          {itemsWithStock.length}
-                        </span>
-                      </button>
+                    {/* Segmented Switcher: Artículos con Stock vs Apartado Stock 0 (Solo en modo STANDARD con visibilidad) */}
+                    {!isBlindActive && activeSummary.hasAdminVisibility && (
+                      <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-900/90 rounded-xl border border-slate-200 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStockSection('with_stock');
+                            setActiveFilter('todos');
+                          }}
+                          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-[11px] font-black uppercase tracking-wide transition-all cursor-pointer ${
+                            stockSection === 'with_stock'
+                              ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-xs border border-slate-200/80 dark:border-slate-700'
+                              : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                          }`}
+                        >
+                          <Package size={13} className="shrink-0" />
+                          <span>Con Existencias</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
+                            stockSection === 'with_stock'
+                              ? 'bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300'
+                              : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                          }`}>
+                            {itemsWithStock.length}
+                          </span>
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStockSection('zero_stock');
-                          setActiveFilter('todos');
-                        }}
-                        className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-[11px] font-black uppercase tracking-wide transition-all cursor-pointer ${
-                          stockSection === 'zero_stock'
-                            ? 'bg-white dark:bg-slate-800 text-amber-700 dark:text-amber-400 shadow-xs border border-amber-300/80 dark:border-amber-700/80'
-                            : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
-                        }`}
-                      >
-                        <AlertCircle size={13} className="shrink-0" />
-                        <span>Apartado Stock 0</span>
-                        <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
-                          stockSection === 'zero_stock'
-                            ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-400'
-                            : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-                        }`}>
-                          {itemsZeroStock.length}
-                        </span>
-                      </button>
-                    </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStockSection('zero_stock');
+                            setActiveFilter('todos');
+                          }}
+                          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-[11px] font-black uppercase tracking-wide transition-all cursor-pointer ${
+                            stockSection === 'zero_stock'
+                              ? 'bg-white dark:bg-slate-800 text-amber-700 dark:text-amber-400 shadow-xs border border-amber-300/80 dark:border-amber-700/80'
+                              : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                          }`}
+                        >
+                          <AlertCircle size={13} className="shrink-0" />
+                          <span>Apartado Stock 0</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
+                            stockSection === 'zero_stock'
+                              ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-400'
+                              : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                          }`}>
+                            {itemsZeroStock.length}
+                          </span>
+                        </button>
+                      </div>
+                    )}
 
                     {/* Fila 2: Chips de Filtro Horizontal */}
                     <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-0.5">
@@ -1080,7 +1666,21 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         Verificados ({currentSectionItems.filter(it => it.is_checked === 1).length})
                       </button>
 
-                      {activeSummary.hasAdminVisibility && (
+                      {recountItemsCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveFilter('reconteo')}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition whitespace-nowrap cursor-pointer shrink-0 animate-pulse ${
+                            activeFilter === 'reconteo'
+                              ? 'bg-purple-600 text-white shadow-xs'
+                              : 'bg-purple-500/10 text-purple-700 dark:text-purple-400 border border-purple-500/20'
+                          }`}
+                        >
+                          Para Reconteo ({currentSectionItems.filter(it => it.recount_requested === 1 || it.status === 'requiere_revision').length})
+                        </button>
+                      )}
+
+                      {!isBlindActive && activeSummary.hasAdminVisibility && (
                         <button
                           type="button"
                           onClick={() => setActiveFilter('diferencias')}
@@ -1090,7 +1690,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                               : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/20'
                           }`}
                         >
-                          Diferencias ({currentSectionItems.filter(it => it.is_checked === 1 && it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0)).length})
+                          Diferencias ({currentSectionItems.filter(it => it.is_checked === 1 && it.system_stock !== undefined && it.counted_stock !== it.system_stock).length})
                         </button>
                       )}
                     </div>
@@ -1141,11 +1741,12 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                       </div>
                     ) : (
                       filteredItems.map(it => {
-                        const isChecked = it.is_checked === 1;
-                        const sysStock = it.system_stock ?? it.live_stock ?? 0;
+                        const isChecked = it.is_checked === 1 && it.status !== 'requiere_revision' && !it.recount_requested;
+                        const isPending = (it.status === 'pendiente' || it.status === 'requiere_revision' || Boolean(it.recount_requested)) || !isChecked;
+                        const showStock = it.system_stock !== undefined && activeSummary.hasAdminVisibility && !isBlindActive;
+                        const sysStock = it.system_stock;
                         const physical = it.counted_stock ?? 0;
-                        const diff = physical - sysStock;
-                        const showStock = it.system_stock !== undefined;
+                        const diff = (showStock && sysStock !== undefined) ? physical - sysStock : undefined;
 
                         return (
                           <div
@@ -1174,44 +1775,49 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                                     {it.product_category}
                                   </span>
                                 )}
+                                {Boolean(it.recount_requested === 1 || it.status === 'requiere_revision') && (
+                                  <span className="px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950/80 text-[9px] font-black uppercase text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-700 animate-pulse">
+                                    Reconteo Requerido
+                                  </span>
+                                )}
                                 {isChecked && (
                                   <span className="ml-auto sm:hidden px-1.5 py-0.2 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-black uppercase border border-emerald-500/20">
-                                    ✓ Verificado
+                                    ✓ {showStock ? 'Verificado' : 'Contado'}
                                   </span>
                                 )}
                               </div>
                               
-                              {/* NOMBRE COMPLETO DEL PRODUCTO (Permite salto de línea fluido en pantallas verticales) */}
+                              {/* NOMBRE COMPLETO DEL PRODUCTO */}
                               <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white uppercase leading-snug break-words whitespace-normal">
                                 {it.product_name}
                               </h3>
 
-                              {/* Existencias POS y Discrepancias */}
-                              <div className="flex items-center gap-2.5 font-mono text-[10px] sm:text-xs">
-                                {showStock && (
+                              {/* Existencias POS y Discrepancias (SOLO EN MODO STANDARD) */}
+                              {showStock && sysStock !== undefined && (
+                                <div className="flex items-center gap-2.5 font-mono text-[10px] sm:text-xs">
                                   <span className="text-slate-500 dark:text-slate-400 font-medium">
                                     Stock POS: <strong className="text-slate-900 dark:text-white font-bold">{sysStock} u</strong>
                                   </span>
-                                )}
-                                {isChecked && showStock && (
-                                  <span className={`font-black px-1.5 py-0.2 rounded ${
-                                    diff === 0 
-                                      ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50' 
-                                      : diff > 0 
-                                        ? 'text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50' 
-                                        : 'text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50'
-                                  }`}>
-                                    {diff === 0 ? '✓ Coincide' : diff > 0 ? `+${diff} u (Sobrante)` : `${diff} u (Faltante)`}
-                                  </span>
-                                )}
-                              </div>
+                                  {isChecked && diff !== undefined && (
+                                    <span className={`font-black px-1.5 py-0.2 rounded ${
+                                      diff === 0 
+                                        ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50' 
+                                        : diff > 0 
+                                          ? 'text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50' 
+                                          : 'text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50'
+                                    }`}>
+                                      {diff === 0 ? '✓ Coincide' : diff > 0 ? `+${diff} u (Sobrante)` : `${diff} u (Faltante)`}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
 
-                            {/* Controles de Conteo (Adaptables a vertical en móviles y horizontal en desktop/kiosco ancho) */}
+                            {/* Controles de Conteo */}
                             <div className="flex items-center justify-between sm:justify-end gap-1.5 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800/80">
                               
-                              {/* Botón Rápido = POS */}
-                              {showStock && (
+                              {/* Botón Rápido = POS (Solo visible si showStock) */}
+                              {showStock && sysStock !== undefined && (
                                 <button
                                   type="button"
                                   onClick={() => handleSetStockToSystem(it)}
@@ -1231,7 +1837,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                               <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-xl p-0.5 border border-slate-200 dark:border-slate-700 shrink-0">
                                 <button
                                   type="button"
-                                  onClick={() => handleUpdateItem(it.id, { counted_stock: Math.max(0, physical - 1), is_checked: 1 })}
+                                  onClick={() => handleUpdateItem(it.id, { counted_stock: Math.max(0, physical - 1), is_checked: 1, status: 'contado' })}
                                   className="w-8 h-8 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-base flex items-center justify-center hover:bg-slate-200 dark:hover:bg-slate-600 transition active:scale-90 cursor-pointer shadow-xs"
                                   title="Restar 1"
                                 >
@@ -1243,18 +1849,24 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                                   inputMode="numeric"
                                   pattern="[0-9]*"
                                   min="0"
-                                  value={it.counted_stock === null || it.counted_stock === undefined ? '' : it.counted_stock}
+                                  placeholder="—"
+                                  value={isPending ? '' : physical}
                                   onFocus={e => e.target.select()}
                                   onChange={e => {
-                                    const val = parseInt(e.target.value);
-                                    handleUpdateItem(it.id, { counted_stock: isNaN(val) ? 0 : Math.max(0, val), is_checked: 1 });
+                                    const raw = e.target.value;
+                                    if (raw === '') {
+                                      handleUpdateItem(it.id, { counted_stock: 0, is_checked: 0, status: 'pendiente' });
+                                    } else {
+                                      const val = parseInt(raw, 10);
+                                      handleUpdateItem(it.id, { counted_stock: isNaN(val) ? 0 : Math.max(0, val), is_checked: 1, status: 'contado' });
+                                    }
                                   }}
-                                  className="w-12 h-8 text-center font-mono font-black text-xs sm:text-sm bg-transparent text-slate-900 dark:text-white focus:outline-none"
+                                  className="w-12 h-8 text-center font-mono font-black text-xs sm:text-sm bg-transparent text-slate-900 dark:text-white focus:outline-none placeholder:text-slate-300 dark:placeholder:text-slate-600"
                                 />
 
                                 <button
                                   type="button"
-                                  onClick={() => handleUpdateItem(it.id, { counted_stock: physical + 1, is_checked: 1 })}
+                                  onClick={() => handleUpdateItem(it.id, { counted_stock: isPending ? 1 : physical + 1, is_checked: 1, status: 'contado' })}
                                   className="w-8 h-8 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-base flex items-center justify-center hover:bg-slate-200 dark:hover:bg-slate-600 transition active:scale-90 cursor-pointer shadow-xs"
                                   title="Sumar 1"
                                 >
@@ -1398,26 +2010,91 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
       {/* MODAL DETALLE HISTÓRICO */}
       {selectedHistoricCount && (
         <div className="fixed inset-0 z-[11000] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-3 md:p-6">
-          <div className="bg-white dark:bg-[#0f172a] rounded-2xl border border-slate-200 dark:border-slate-800 max-w-xl w-full p-4 shadow-2xl flex flex-col gap-3 max-h-[85vh]">
+          <div className="bg-white dark:bg-[#0f172a] rounded-2xl border border-slate-200 dark:border-slate-800 max-w-2xl w-full p-4 md:p-5 shadow-2xl flex flex-col gap-3 max-h-[88vh]">
+            {/* Cabecera del modal con exportación */}
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
               <div>
-                <h3 className="text-sm font-black text-slate-800 dark:text-white uppercase">
-                  Auditoría #{selectedHistoricCount.id}
-                </h3>
-                <p className="text-[10px] text-slate-400">
-                  {selectedHistoricCount.store_name || 'Almacén Principal'} · {selectedHistoricCount.auditor_name || selectedHistoricCount.username}
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm md:text-base font-black text-slate-800 dark:text-white uppercase tracking-tight">
+                    Auditoría #{selectedHistoricCount.id}
+                  </h3>
+                  <span className={`px-2 py-0.2 rounded text-[9px] font-black uppercase border ${
+                    selectedHistoricCount.status === 'cerrado' || selectedHistoricCount.status === 'aprobado'
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                      : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
+                  }`}>
+                    {selectedHistoricCount.status === 'cerrado' || selectedHistoricCount.status === 'aprobado' ? 'Conciliado' : selectedHistoricCount.status}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  {selectedHistoricCount.store_name || 'Almacén Principal'} · Auditor: <strong className="text-slate-600 dark:text-slate-300">{selectedHistoricCount.auditor_name || selectedHistoricCount.username}</strong>
+                  {selectedHistoricCount.approved_by_username && (
+                    <span> · Aprobó: <strong className="text-indigo-600 dark:text-indigo-400">{selectedHistoricCount.approved_by_username}</strong></span>
+                  )}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedHistoricCount(null)}
-                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 cursor-pointer"
-              >
-                <X size={18} />
-              </button>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => exportCountToCsv(selectedHistoricCount, historicItems)}
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-[10px] font-bold uppercase transition cursor-pointer flex items-center gap-1 border border-slate-200 dark:border-slate-700"
+                  title="Exportar archivo CSV"
+                >
+                  <Download size={12} />
+                  <span>CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => exportCountToPDF(selectedHistoricCount, historicItems)}
+                  className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-300 rounded-lg text-[10px] font-bold uppercase transition cursor-pointer flex items-center gap-1 border border-indigo-200/50 dark:border-indigo-800/50"
+                  title="Descargar informe PDF"
+                >
+                  <Printer size={12} />
+                  <span>PDF</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedHistoricCount(null)}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
-            {/* Filtro rápido en detalle histórico */}
+            {/* Resumen numérico del informe histórico */}
+            {(() => {
+              const total = historicItems.length;
+              const correct = historicItems.filter(it => it.counted_stock === (it.system_stock ?? it.live_stock ?? 0)).length;
+              const withDiff = historicItems.filter(it => it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0)).length;
+              const netUnits = historicItems.reduce((sum, it) => sum + ((it.counted_stock ?? 0) - (it.system_stock ?? it.live_stock ?? 0)), 0);
+
+              return (
+                <div className="grid grid-cols-4 gap-2 bg-slate-50 dark:bg-black/30 p-2 rounded-xl text-center">
+                  <div>
+                    <span className="text-[8px] font-black uppercase text-slate-400 block">Total</span>
+                    <span className="text-xs font-mono font-bold text-slate-800 dark:text-white">{total}</span>
+                  </div>
+                  <div>
+                    <span className="text-[8px] font-black uppercase text-slate-400 block">Coincidentes</span>
+                    <span className="text-xs font-mono font-bold text-emerald-500">{correct}</span>
+                  </div>
+                  <div>
+                    <span className="text-[8px] font-black uppercase text-slate-400 block">Con Dif.</span>
+                    <span className="text-xs font-mono font-bold text-rose-500">{withDiff}</span>
+                  </div>
+                  <div>
+                    <span className="text-[8px] font-black uppercase text-slate-400 block">Dif. Neta</span>
+                    <span className={`text-xs font-mono font-bold ${netUnits >= 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
+                      {netUnits > 0 ? `+${netUnits}` : netUnits} u
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Filtros en detalle histórico */}
             <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-900 rounded-xl text-[10px] font-bold">
               <button
                 type="button"
@@ -1428,48 +2105,87 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
               </button>
               <button
                 type="button"
-                onClick={() => setHistoricStockFilter('with_stock')}
-                className={`flex-1 py-1 rounded-lg text-center cursor-pointer transition ${historicStockFilter === 'with_stock' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs' : 'text-slate-500'}`}
+                onClick={() => setHistoricStockFilter('diferencias')}
+                className={`flex-1 py-1 rounded-lg text-center cursor-pointer transition ${historicStockFilter === 'diferencias' ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-500'}`}
               >
-                Con Stock ({historicItems.filter(it => (it.system_stock ?? it.live_stock ?? 0) > 0).length})
+                Con Diferencias ({historicItems.filter(it => it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0)).length})
               </button>
               <button
                 type="button"
-                onClick={() => setHistoricStockFilter('zero_stock')}
-                className={`flex-1 py-1 rounded-lg text-center cursor-pointer transition ${historicStockFilter === 'zero_stock' ? 'bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 shadow-xs' : 'text-slate-500'}`}
+                onClick={() => setHistoricStockFilter('coincidentes')}
+                className={`flex-1 py-1 rounded-lg text-center cursor-pointer transition ${historicStockFilter === 'coincidentes' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-500'}`}
               >
-                Stock 0 ({historicItems.filter(it => (it.system_stock ?? it.live_stock ?? 0) <= 0).length})
+                Coincidentes ({historicItems.filter(it => it.counted_stock === (it.system_stock ?? it.live_stock ?? 0)).length})
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl">
+            {/* Lista detallada de productos */}
+            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl max-h-[340px]">
               {historicItems
                 .filter(it => {
-                  const stock = it.system_stock ?? it.live_stock ?? 0;
-                  if (historicStockFilter === 'with_stock') return stock > 0;
-                  if (historicStockFilter === 'zero_stock') return stock <= 0;
+                  const sys = it.system_stock ?? it.live_stock ?? 0;
+                  const diff = (it.counted_stock ?? 0) - sys;
+                  if (historicStockFilter === 'diferencias') return diff !== 0;
+                  if (historicStockFilter === 'coincidentes') return diff === 0;
+                  if (historicStockFilter === 'with_stock') return sys > 0;
+                  if (historicStockFilter === 'zero_stock') return sys <= 0;
                   return true;
                 })
-                .map(it => (
-                <div key={it.id} className="p-2 flex items-center justify-between text-xs gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="font-bold text-slate-800 dark:text-white uppercase truncate text-xs">{it.product_name}</div>
-                    <div className="text-[9px] text-slate-400 font-mono">SKU: {it.product_sku}</div>
-                  </div>
-                  <div className="flex items-center gap-2 font-mono text-xs">
-                    <span className="text-[10px] text-slate-500">POS: {it.system_stock ?? it.live_stock ?? 0}</span>
-                    <span className="text-[10px] font-bold text-slate-800 dark:text-white">Físico: {it.counted_stock}</span>
-                  </div>
-                </div>
-              ))}
+                .map(it => {
+                  const sys = it.system_stock ?? it.live_stock ?? 0;
+                  const physical = it.counted_stock ?? 0;
+                  const diff = physical - sys;
+                  const hasDiff = diff !== 0;
+
+                  return (
+                    <div key={it.id} className={`p-2 flex items-center justify-between text-xs gap-2 transition ${
+                      hasDiff ? 'bg-rose-500/5 dark:bg-rose-950/20' : ''
+                    }`}>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-bold text-slate-800 dark:text-white uppercase truncate text-xs flex items-center gap-1.5">
+                          <span className="truncate">{it.product_name}</span>
+                          {it.recount_requested === 1 && (
+                            <span className="shrink-0 px-1 py-0.2 bg-purple-500/20 text-purple-700 dark:text-purple-300 text-[8px] font-bold rounded">
+                              Recontado
+                            </span>
+                          )}
+                          {it.had_movements_during_count === 1 && (
+                            <span className="shrink-0 px-1 py-0.2 bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[8px] font-bold rounded">
+                              ⚡ Mov. durante conteo
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[9px] text-slate-400 font-mono">
+                          SKU: {it.product_sku} {it.product_category ? `• ${it.product_category}` : ''}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 text-right font-mono text-[10px]">
+                        <span className="text-slate-500">POS: <strong>{sys}</strong></span>
+                        <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded font-bold text-slate-800 dark:text-white">
+                          Físico: {physical}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black w-24 text-center ${
+                          diff === 0 
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' 
+                            : diff > 0 
+                              ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20' 
+                              : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                        }`}>
+                          {diff === 0 ? '✓ Coincide' : diff > 0 ? `+${diff} Sobrante` : `${diff} Faltante`}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
 
             <button
               type="button"
               onClick={() => setSelectedHistoricCount(null)}
-              className="w-full py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl cursor-pointer"
+              className="w-full py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
             >
-              Cerrar
+              Cerrar Detalle
             </button>
           </div>
         </div>

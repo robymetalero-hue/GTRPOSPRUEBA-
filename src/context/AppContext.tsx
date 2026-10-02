@@ -212,6 +212,8 @@ interface AppContextType {
     applyPwaUpdate: () => Promise<void>;
     handlePwaPrimaryAction: () => Promise<void>;
     showNotification?: (message: string, type?: 'success' | 'error' | 'warn' | 'info') => void;
+    inventoryLock: { isLocked: boolean; activeCount: any | null };
+    fetchInventoryLockStatus: () => Promise<void>;
 }
 
 /**
@@ -246,6 +248,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [isSupervisorUnlocked, setIsSupervisorUnlocked] = useState(false);
     const [supervisorInfo, setSupervisorInfo] = useState<{ id: number; username: string; role: string } | null>(null);
     const [isFullscreen, setIsFullscreen] = useState<boolean>(() => typeof document !== 'undefined' ? !!document.fullscreenElement : false);
+    const [inventoryLock, setInventoryLock] = useState<{ isLocked: boolean; activeCount: any | null }>({ isLocked: false, activeCount: null });
 
     useEffect(() => {
         const handleFullscreenChange = () => {
@@ -1251,6 +1254,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     };
 
+    const fetchInventoryLockStatus = async () => {
+        try {
+            const res = await fetchWithRetry('/api/inventory-counts/lock-status');
+            if (res.ok) {
+                const data = await res.json();
+                setInventoryLock({
+                    isLocked: Boolean(data.isLocked),
+                    activeCount: data.activeCount || null
+                });
+            }
+        } catch (_) {
+            // fail-soft
+        }
+    };
+
     const fetchDepartments = async () => {
         try {
             const res = await fetchWithRetry('/api/departments');
@@ -1411,6 +1429,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }).catch(() => {});
         }
         fetchProducts().catch(() => {});
+        fetchInventoryLockStatus().catch(() => {});
+
+        const handleInvOp = () => {
+            fetchInventoryLockStatus().catch(() => {});
+        };
+        window.addEventListener('inventory_operation', handleInvOp);
+        return () => window.removeEventListener('inventory_operation', handleInvOp);
     }, []);
 
     const fetchClients = async () => {
@@ -2158,7 +2183,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             checkForPwaUpdates,
             applyPwaUpdate,
             handlePwaPrimaryAction,
-            showNotification
+            showNotification,
+            inventoryLock,
+            fetchInventoryLockStatus
         }}>
             {children}
         </AppContext.Provider>

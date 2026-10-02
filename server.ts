@@ -142,6 +142,33 @@ export function getSystemExchangeRate(): number {
   return 6.96;
 }
 
+// ============================================================
+// BLOQUEO OPERATIVO DE INVENTARIO DURANTE CONTROL FÍSICO
+// ============================================================
+export function getActiveInventoryCount() {
+  try {
+    return db.prepare("SELECT id, auditor_name, store_name, mode, status FROM inventory_counts WHERE status IN ('en_progreso', 'pausado', 'completado', 'finalizado') ORDER BY id DESC LIMIT 1").get() as any;
+  } catch (err: any) {
+    console.error("[Inventory Lock Check Error]:", err.message);
+    return null;
+  }
+}
+
+export function checkInventoryLock(res: express.Response): boolean {
+  const activeCount = getActiveInventoryCount();
+  if (activeCount) {
+    res.status(423).json({
+      error: "INVENTORY_COUNT_ACTIVE",
+      message: `Existe un Control Físico de Inventario activo (#${activeCount.id} - ${activeCount.store_name || 'Almacén Principal'}). Las operaciones que modifican inventario están temporalmente bloqueadas.`,
+      inventory_count_id: activeCount.id,
+      mode: activeCount.mode,
+      status: activeCount.status
+    });
+    return true; // Bloqueado
+  }
+  return false; // Desbloqueado
+}
+
 async function startServer() {
   const app = express();
 
@@ -2550,6 +2577,11 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       return res.status(400).json({ error: "El nombre, SKU y categoría son obligatorios." });
     }
 
+    // Bloquear creación con stock inicial si existe un control físico activo
+    if (Number(stock || 0) > 0) {
+      if (checkInventoryLock(res)) return;
+    }
+
     const trimmedName = name.trim();
     const trimmedSku = sku.trim();
     const trimmedCategory = category.trim();
@@ -2697,6 +2729,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     if (!Array.isArray(products) || products.length === 0) {
       return res.status(400).json({ error: "Debe proveer una lista de productos válida." });
     }
+
+    if (checkInventoryLock(res)) return;
 
     try {
       const selectBySkuStmt = db.prepare('SELECT id, name, sku, stock, price_cost, price_unit FROM products WHERE LOWER(TRIM(sku)) = LOWER(?)');
@@ -2947,6 +2981,11 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         return res.status(404).json({ error: "Producto no encontrado." });
       }
 
+      // Si se intenta modificar el stock del producto mientras hay un conteo activo, bloquear
+      if (stock !== undefined && safeStock !== Number(oldProd.stock)) {
+        if (checkInventoryLock(res)) return;
+      }
+
       const trimmedName = name.trim();
       const trimmedSku = sku.trim();
 
@@ -3096,6 +3135,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   app.delete("/api/products/:id", enforcePermission('delete_products'), (req, res) => {
     const { id } = req.params;
     try {
+      if (checkInventoryLock(res)) return;
+
       const oldProd = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
       const prodName = oldProd ? oldProd.name : `Producto #${id}`;
       const stockBefore = oldProd ? oldProd.stock : 0;
@@ -3147,6 +3188,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       return res.status(400).json({ error: "Se requiere un array 'ids' con los identificadores de productos a eliminar." });
     }
     try {
+      if (checkInventoryLock(res)) return;
+
       const auditUser = (req as any).auditUser || {};
       const deletedIds: (string | number)[] = [];
 
@@ -3666,6 +3709,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       return res.status(400).json({ error: "Datos del ingreso de stock inválidos." });
     }
     try {
+      if (checkInventoryLock(res)) return;
+
       const parsedPrice = Number(arrival_price);
       // Retrieve old product cost
       const prod = db.prepare('SELECT price_cost FROM products WHERE id = ?').get(product_id) as any;
@@ -4655,6 +4700,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   app.post("/api/sales/refund", (req, res) => {
     const { sale_id, item_refunds, user_id, username } = req.body;
     try {
+      if (checkInventoryLock(res)) return;
+
       if (!sale_id || !Array.isArray(item_refunds) || item_refunds.length === 0) {
         return res.status(400).json({ error: "Datos de devolución inválidos." });
       }
@@ -4907,6 +4954,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   });
 
   app.post("/api/sales", enforcePermission('create_sales'), (req, res) => {
+    if (checkInventoryLock(res)) return;
+
     const { total, discount, payment_method, user_id, client_id, items, initial_abono, due_date, redeemed_points, currency, exchange_rate, notes } = req.body;
     const clientOpId = req.body.clientOperationId || req.body.client_operation_id || null;
 
@@ -5515,6 +5564,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     const { id } = req.params;
     const { payment_method, user_id, client_id, initial_abono, due_date, redeemed_points } = req.body;
     try {
+      if (checkInventoryLock(res)) return;
+
       const sale = db.prepare(`SELECT * FROM pending_sales WHERE id = ?`).get(id) as any;
       if (!sale) {
         return res.status(404).json({ error: "El pedido pendiente especificado no existe." });
@@ -5972,6 +6023,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     const forceOverride = Boolean(req.body.force_override || req.body.force);
 
     try {
+      if (checkInventoryLock(res)) return;
+
       const pendingSale = db.prepare('SELECT * FROM offline_pending_sales WHERE id = ?').get(id) as any;
       if (!pendingSale) {
         return res.status(404).json({ error: 'La venta offline solicitada no existe o ya no está disponible.' });
@@ -7526,6 +7579,19 @@ DIRECTIVAS CRÍTICAS:
 
   // --- ENDPOINTS: CONTROL FÍSICO DE INVENTARIO Y AUDITORÍA A CIEGAS ---
 
+  // Consultar estado de bloqueo de inventario para UI y POS
+  app.get("/api/inventory-counts/lock-status", (req, res) => {
+    try {
+      const activeCount = getActiveInventoryCount();
+      res.json({
+        isLocked: !!activeCount,
+        activeCount: activeCount || null
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Obtener todas las sesiones de conteo físico
   app.get("/api/inventory-counts", (req, res) => {
     try {
@@ -7740,9 +7806,9 @@ DIRECTIVAS CRÍTICAS:
         ORDER BY ici.id ASC
       `).all(id) as any[];
 
-      // Ocultar stock del sistema SOLO si es una sesión MODO A CIEGAS y quien consulta no es un Administrador/Propietario (o vista explicita de auditor)
+      // Ocultar stock del sistema SIEMPRE que sea una sesión MODO A CIEGAS y quien consulta no sea Administrador/Propietario (o vista explícita de auditor), sin importar el estado
       const isBlindSession = count.mode === 'BLIND';
-      const hideSystemStock = isBlindSession && (!isAdmin || isAuditorView) && count.status !== 'cerrado' && count.status !== 'finalizado' && count.status !== 'completado';
+      const hideSystemStock = isBlindSession && (!isAdmin || isAuditorView);
 
       if (hideSystemStock) {
         items = items.map((it: any) => ({
@@ -7893,6 +7959,28 @@ DIRECTIVAS CRÍTICAS:
       // Reactivar sesión a 'en_progreso' para que el auditor pueda volver a contar esos items
       db.prepare(`UPDATE inventory_counts SET status = 'en_progreso' WHERE id = ?`).run(id);
 
+      try {
+        const auditUser = (req as any).auditUser || {};
+        insertSystemAuditLog({
+          eventType: 'INVENTORY_RECOUNT_REQUESTED',
+          category: 'INVENTORY_COUNT',
+          module: 'CONTROL_FISICO',
+          action: `Solicitud de Reconteo Parcial (${item_ids.length} artículos)`,
+          severity: 'warning',
+          entityType: 'conteo_fisico',
+          entityId: Number(id),
+          entityName: `Control Físico #${id}`,
+          userId: auditUser.userId || 1,
+          userName: auditUser.userName || 'admin',
+          userRole: auditUser.userRole || 'admin',
+          reason: reason || 'Reconteo de discrepancias solicitado por administración',
+          afterData: { count_id: id, items_count: item_ids.length, item_ids },
+          status: 'success'
+        });
+      } catch (auditErr: any) {
+        console.warn("[Audit Error] Failed to log recount request:", auditErr.message);
+      }
+
       res.json({ success: true, message: `Recuento solicitado para ${item_ids.length} artículos.` });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -7912,8 +8000,8 @@ DIRECTIVAS CRÍTICAS:
       const userRole = req.headers['x-user-role'] || req.query.user_role || '';
       const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe';
 
-      // Si se solicita aplicar directamente (o si es Administrador concluyendo un conteo directo)
-      if ((status === 'completado' || status === 'finalizado' || status === 'cerrado') && (auto_apply || isAdmin)) {
+      // Separación estricta: 'completado' o 'finalizado' solo preparan el informe. NUNCA modifican el inventario.
+      if (status === 'cerrado' && auto_apply === true && isAdmin) {
         const items = db.prepare('SELECT * FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
         
         const transaction = db.transaction(() => {
@@ -7960,6 +8048,25 @@ DIRECTIVAS CRÍTICAS:
 
       if (status === 'finalizado' || status === 'completado') {
         query += ", completed_at = CURRENT_TIMESTAMP";
+
+        // Recalcular métricas exactas de la sesión al completar
+        const stats = db.prepare(`
+          SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status != 'pendiente' THEN 1 ELSE 0 END) as reviewed,
+            SUM(CASE WHEN status = 'correcto' THEN 1 ELSE 0 END) as correct,
+            SUM(CASE WHEN status = 'diferencia' THEN 1 ELSE 0 END) as diff
+          FROM inventory_count_items
+          WHERE inventory_count_id = ?
+        `).get(id) as any;
+
+        const totalProducts = stats?.total || 0;
+        const reviewedProducts = stats?.reviewed || 0;
+        const correctProducts = stats?.correct || 0;
+        const differenceProducts = stats?.diff || 0;
+
+        query += ", total_products = ?, reviewed_products = ?, correct_products = ?, difference_products = ?";
+        updateData.push(totalProducts, reviewedProducts, correctProducts, differenceProducts);
       }
       if (notes !== undefined) {
         query += ", notes = ?";
@@ -8027,7 +8134,12 @@ DIRECTIVAS CRÍTICAS:
             const p = db.prepare('SELECT stock, price_cost, name, sku FROM products WHERE id = ?').get(item.product_id) as any;
             if (p) {
               const oldStock = p.stock;
-              const newStock = item.physical_quantity;
+              const snapshot = item.expected_quantity_snapshot ?? item.expected_quantity ?? oldStock;
+              
+              // Verificación de snapshot: si hubo ventas durante el conteo (oldStock !== snapshot),
+              // se concilia aplicando el delta físico para no sobreescribir ventas legítimas
+              const delta = item.physical_quantity - snapshot;
+              const newStock = Math.max(0, oldStock === snapshot ? item.physical_quantity : oldStock + delta);
               
               // Apply adjustment
               db.prepare('UPDATE products SET stock = ?, updated_at = ? WHERE id = ?').run(newStock, getBoliviaISOString(), item.product_id);
@@ -8053,7 +8165,7 @@ DIRECTIVAS CRÍTICAS:
                 normUserId, 
                 normUsername, 
                 `Conciliación #${id}`, 
-                `Ajuste por control físico de inventario (De ${oldStock} a ${newStock} pz). Obs: ${notes || 'Conforme'}`,
+                `Ajuste por control físico (De ${oldStock} a ${newStock} pz). Obs: ${notes || 'Conforme'}`,
                 getBoliviaISOString()
               );
 
@@ -8087,12 +8199,14 @@ DIRECTIVAS CRÍTICAS:
           }
         }
 
-        // Close session
+        // Close session with approval metadata
         db.prepare(`
           UPDATE inventory_counts 
-          SET status = 'cerrado', notes = ?
+          SET status = 'cerrado', completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP), approved_at = CURRENT_TIMESTAMP, approved_by_username = ?, notes = ?
           WHERE id = ?
-        `).run(notes || 'Conciliado y cerrado por administración.', id);
+        `).run(admin_username || 'admin', notes || 'Conciliado y cerrado por administración.', id);
+
+        incrementInventoryVersion();
 
         // Add overall count approval audit log
         try {
@@ -9232,6 +9346,16 @@ DIRECTIVAS CRÍTICAS:
                   }
                 } else if (fc.name === "addNewProductToInventory") {
                   const { name, category, sku, priceUnit, stock, stockAlarm } = fc.args as any;
+                  if (getActiveInventoryCount()) {
+                    activeSession.sendToolResponse({
+                      functionResponses: [{
+                        id: fc.id,
+                        name: fc.name,
+                        response: { result: "Operación rechazada: Existe un Control Físico de Inventario activo. No se permiten modificaciones de existencias hasta que el control sea cerrado por Administración." }
+                      }]
+                    });
+                    continue;
+                  }
                   try {
                     const trimmedName = String(name || '').trim();
                     const trimmedSku = String(sku || '').trim();
@@ -9324,6 +9448,16 @@ DIRECTIVAS CRÍTICAS:
                   }
                 } else if (fc.name === "updateProductStock") {
                   const { skuOrName, stock } = fc.args as any;
+                  if (getActiveInventoryCount()) {
+                    activeSession.sendToolResponse({
+                      functionResponses: [{
+                        id: fc.id,
+                        name: fc.name,
+                        response: { result: "Operación rechazada: Existe un Control Físico de Inventario activo. No se permiten modificaciones de existencias hasta que el control sea cerrado por Administración." }
+                      }]
+                    });
+                    continue;
+                  }
                   try {
                     let updated = db.prepare('UPDATE products SET stock = ?, updated_at = ? WHERE sku = ?').run(stock, getBoliviaISOString(), skuOrName);
                     if (updated.changes === 0) {

@@ -252,7 +252,8 @@ export default function POS() {
         paymentMethod, setPaymentMethod, departments, fetchDepartments,
         hasMoreProducts, loadMoreProducts,
         deductLocalProductStock, registerLocalClient,
-        isSupervisorUnlocked, isFullscreen, toggleFullscreen
+        isSupervisorUnlocked, isFullscreen, toggleFullscreen,
+        inventoryLock
     } = useAppContext();
 
     const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
@@ -1513,6 +1514,11 @@ export default function POS() {
     const executeCheckout = async (methodToUse = paymentMethod) => {
         if (cart.length === 0) return;
         if (isCheckoutProcessing) return;
+
+        if (inventoryLock?.isLocked) {
+            showNotification(`⚠️ Operaciones pausadas: Existe un Control Físico de Inventario activo (#${inventoryLock.activeCount?.id || ''}). Las ventas se reanudarán al conciliar el conteo.`, "error");
+            return;
+        }
 
         if (methodToUse === 'Crédito' && !clientName.trim()) {
             showNotification("⚠️ Se requiere registrar un cliente con Nombre para procesar ventas al Crédito.", "error");
@@ -2777,6 +2783,18 @@ export default function POS() {
                 {/* FIXED STICKY HEADER PANEL FOR MOBILE AND DESKTOP */}
                 <div className="px-3.5 pt-3.5 pb-2.5 md:px-5 md:pt-5 bg-neutral-50/95 dark:bg-[#070a10]/95 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-850/30 flex flex-col gap-3 shrink-0 z-10 select-none">
                     
+                    {/* Alerta Preventiva: Control Físico de Inventario en Progreso */}
+                    {inventoryLock?.isLocked && (
+                        <div className="bg-amber-500/10 border border-amber-500/30 px-3 py-2 rounded-xl flex items-center justify-between gap-2 text-amber-800 dark:text-amber-300 text-xs shrink-0">
+                            <div className="flex items-center gap-2">
+                                <AlertTriangle size={15} className="shrink-0 text-amber-500" />
+                                <span>
+                                    <strong>Control Físico en Progreso (#{inventoryLock.activeCount?.id}):</strong> Las ventas están temporalmente pausadas para proteger la exactitud del conteo.
+                                </span>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Upper active ticket tabs matching Image 2 */}
                     <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between shrink-0">
                         {/* Active Tabs & Add Button */}

@@ -212,7 +212,7 @@ const InventorySearchInput = React.memo(({
 export default function Inventory() {
     const { 
         products, fetchProducts, user, exchangeRate, roundBs, departments, fetchDepartments, view,
-        hasMoreProducts, loadMoreProducts
+        hasMoreProducts, loadMoreProducts, inventoryLock
     } = useAppContext();
     const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
     const elasticScroll = useElasticScroll(true);
@@ -1451,6 +1451,30 @@ export default function Inventory() {
                 }`}>
                     <span className="text-sm">{notification.type === 'success' ? '✓' : '⚠️'}</span>
                     <span>{notification.message}</span>
+                </div>
+            )}
+
+            {/* ALERTA DE BLOQUEO PREVENTIVO DE INVENTARIO */}
+            {inventoryLock?.isLocked && (
+                <div className="bg-amber-500/10 border border-amber-500/30 p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-800 dark:text-amber-300 text-xs">
+                    <div className="flex items-center gap-2.5">
+                        <AlertTriangle size={18} className="text-amber-500 shrink-0" />
+                        <div>
+                            <span className="font-black uppercase tracking-wider block">
+                                Control Físico de Inventario Activo (#{inventoryLock.activeCount?.id})
+                            </span>
+                            <span className="text-[11px] opacity-90">
+                                La tienda se encuentra en auditoría ({inventoryLock.activeCount?.store_name || 'Almacén Principal'}). Las entradas de mercadería, importaciones y ajustes de stock están pausados para garantizar la exactitud de los resultados.
+                            </span>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setIsPhysicalCountOpen(true)}
+                        className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition shrink-0 cursor-pointer shadow-sm"
+                    >
+                        Gestionar Control
+                    </button>
                 </div>
             )}
 
