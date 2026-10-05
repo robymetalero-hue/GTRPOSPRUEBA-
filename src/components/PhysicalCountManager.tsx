@@ -85,10 +85,17 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const [storeName, setStoreName] = useState<string>('Almacén Principal');
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
   const [categories, setCategories] = useState<string[]>([]);
-  const [isBlindMode, setIsBlindMode] = useState<boolean>(!isAdmin && !canPreviewQuantities);
+  const [isBlindMode, setIsBlindMode] = useState<boolean>(!isAdmin && !canPreviewQuantities ? true : true);
   const [sessionNotes, setSessionNotes] = useState<string>('');
 
-  // Advertencia de segregación de funciones
+  // Sincronizar forzado de modo a ciegas para operadores sin permisos de previsualización
+  useEffect(() => {
+    if (!canPreviewQuantities && !isBlindMode) {
+      setIsBlindMode(true);
+    }
+  }, [canPreviewQuantities, isBlindMode]);
+
+  // Advertencia de segregación de funciones (solo relevante si el usuario intenta hacer conteo con visibilidad STANDARD)
   const [overrideSegregation, setOverrideSegregation] = useState<boolean>(false);
   const [overrideReason, setOverrideReason] = useState<string>('');
   const [segregationWarning, setSegregationWarning] = useState<string | null>(null);
@@ -137,19 +144,19 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     }
   }, [products]);
 
-  // Validar segregación de funciones
+  // Validar segregación de funciones (solo relevante si el usuario intenta hacer conteo con visibilidad STANDARD)
   useEffect(() => {
-    if (!isAdmin && user?.username && auditorName) {
+    if (!isAdmin && !isBlindMode && user?.username && auditorName) {
       const isOperatorSelfAuditing = auditorName.toLowerCase().trim().includes(user.username.toLowerCase().trim()) || auditorName.toLowerCase().includes('cajero');
       if (isOperatorSelfAuditing && !overrideSegregation) {
-        setSegregationWarning("Advertencia de Segregación: Se requiere confirmación para auto-auditoría de trabajador.");
+        setSegregationWarning("Advertencia de Segregación: Se requiere confirmación para auto-auditoría con existencias visibles.");
       } else {
         setSegregationWarning(null);
       }
     } else {
       setSegregationWarning(null);
     }
-  }, [auditorName, user, overrideSegregation, isAdmin]);
+  }, [auditorName, user, overrideSegregation, isAdmin, isBlindMode]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -267,14 +274,15 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
     setIsLoading(true);
     try {
+      const finalBlind = !canPreviewQuantities ? true : isBlindMode;
       const payload = {
         user_id: user?.id || 1,
         username: user?.username || 'admin',
         auditor_name: auditorName.trim(),
         store_name: storeName.trim(),
-        notes: sessionNotes || `Control Físico de Almacén${isBlindMode ? ' a Ciegas' : ''}`,
+        notes: sessionNotes || `Control Físico de Almacén${finalBlind ? ' a Ciegas' : ''}`,
         category_filter: selectedCategory === 'Todos' ? null : selectedCategory,
-        mode: isBlindMode ? 'BLIND' : 'STANDARD',
+        mode: finalBlind ? 'BLIND' : 'STANDARD',
         override_segregation: overrideSegregation ? 1 : 0,
         override_reason: overrideSegregation ? overrideReason : null
       };
@@ -1131,18 +1139,26 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         <div className="grid grid-cols-2 gap-2 mt-1">
                           <button
                             type="button"
-                            onClick={() => setIsBlindMode(false)}
-                            className={`p-2 rounded-xl border text-left flex flex-col gap-0.5 transition cursor-pointer ${
-                              !isBlindMode
-                                ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 dark:text-emerald-300 ring-1 ring-emerald-500/30'
-                                : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500'
+                            disabled={!canPreviewQuantities}
+                            onClick={() => {
+                              if (canPreviewQuantities) setIsBlindMode(false);
+                            }}
+                            className={`p-2 rounded-xl border text-left flex flex-col gap-0.5 transition ${
+                              !canPreviewQuantities
+                                ? 'opacity-40 cursor-not-allowed bg-slate-100 dark:bg-[#121a2b] border-slate-200 dark:border-slate-800 text-slate-400'
+                                : !isBlindMode
+                                ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 dark:text-emerald-300 ring-1 ring-emerald-500/30 cursor-pointer'
+                                : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500 cursor-pointer'
                             }`}
+                            title={!canPreviewQuantities ? "Deshabilitado: Requiere permisos de administrador o previsualización de stock" : "Ver stock esperado del sistema durante el conteo"}
                           >
                             <span className="text-xs font-black uppercase flex items-center gap-1.5">
-                              <Eye size={12} className="text-emerald-500" />
-                              Visible (POS)
+                              <Eye size={12} className={canPreviewQuantities ? "text-emerald-500" : "text-slate-400"} />
+                              Visible (Con Control)
                             </span>
-                            <span className="text-[9px] font-medium opacity-80 leading-tight">Muestra el stock del sistema</span>
+                            <span className="text-[9px] font-medium opacity-80 leading-tight">
+                              {!canPreviewQuantities ? 'Deshabilitado para este usuario' : 'Muestra el stock del sistema'}
+                            </span>
                           </button>
 
                           <button
@@ -1158,15 +1174,32 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                               <ShieldCheck size={12} className="text-indigo-500" />
                               A Ciegas
                             </span>
-                            <span className="text-[9px] font-medium opacity-80 leading-tight">Oculta existencias</span>
+                            <span className="text-[9px] font-medium opacity-80 leading-tight">Oculta existencias (Permitido)</span>
                           </button>
                         </div>
+                        {!canPreviewQuantities && (
+                          <div className="mt-1.5 p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-[10px] font-medium flex items-center gap-1.5">
+                            <ShieldCheck size={13} className="shrink-0 text-indigo-500" />
+                            <span>El inventario con control de cantidades físicas está deshabilitado. Tienes habilitado el <strong>inventario a ciegas</strong>.</span>
+                          </div>
+                        )}
                       </div>
 
-                      {segregationWarning && !isAdmin && (
-                        <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-2 text-amber-700 dark:text-amber-300 text-xs">
-                          <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-500" />
-                          <p className="text-[10px] leading-tight">{segregationWarning}</p>
+                      {segregationWarning && !isAdmin && !isBlindMode && (
+                        <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl flex flex-col gap-1.5 text-amber-800 dark:text-amber-300 text-xs">
+                          <div className="flex items-start gap-2">
+                            <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-500" />
+                            <p className="text-[10px] leading-tight">{segregationWarning}</p>
+                          </div>
+                          <label className="flex items-center gap-2 cursor-pointer mt-1 text-[10px] font-bold">
+                            <input
+                              type="checkbox"
+                              checked={overrideSegregation}
+                              onChange={e => setOverrideSegregation(e.target.checked)}
+                              className="rounded text-indigo-600 focus:ring-0"
+                            />
+                            <span>Confirmar excepción de auto-conteo</span>
+                          </label>
                         </div>
                       )}
 

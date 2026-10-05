@@ -7639,8 +7639,15 @@ DIRECTIVAS CRÍTICAS:
     } = req.body;
 
     try {
-      const userRole = req.headers['x-user-role'] || req.body.user_role || '';
+      const verifiedUser = (req as any).verifiedUser;
+      const userRole = req.headers['x-user-role'] || req.body.user_role || (verifiedUser ? verifiedUser.role : '');
       const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe' || username === 'admin';
+      const userPerms = (verifiedUser && verifiedUser.permissions) ? verifiedUser.permissions : {};
+      const canPreviewQuantities = isAdmin || !!userPerms.preview_quantities_in_count;
+
+      // REGLA: Si el usuario no tiene permisos de administrador ni preview_quantities_in_count,
+      // la opción con control para ver cantidades físicas queda estrictamente bloqueada/deshabilitada, forzando 'BLIND'.
+      const finalMode = (canPreviewQuantities && mode === 'STANDARD') ? 'STANDARD' : 'BLIND';
 
       if (force_new) {
         db.prepare("UPDATE inventory_counts SET status = 'cancelado', notes = 'Cancelada automáticamente al iniciar nueva auditoría' WHERE status IN ('en_progreso', 'pausado')").run();
@@ -7659,13 +7666,14 @@ DIRECTIVAS CRÍTICAS:
       const store = (store_name || 'Almacén Principal').trim();
 
       // --- VALIDACIÓN DE SEGREGACIÓN DE FUNCIONES ---
-      // Solo aplica a trabajadores/empleados. Los Administradores/Propietarios NO requieren justificación ni son bloqueados.
-      if (!isAdmin) {
+      // Solo aplica si se intenta realizar un conteo visible con control (STANDARD).
+      // En modo A CIEGAS (BLIND), el operador NO ve las existencias del sistema, por lo que el conteo es 100% ciego e imparcial y está totalmente permitido.
+      if (!isAdmin && finalMode === 'STANDARD') {
         const isOperatorSelfAuditing = (username && assignedAuditor.toLowerCase().includes(username.toLowerCase())) || assignedAuditor.toLowerCase().includes('cajero');
         if (isOperatorSelfAuditing && !override_segregation) {
           return res.status(400).json({ 
             segregation_warning: true,
-            error: "Advertencia de Segregación de Funciones: El auditor asignado es el operador principal de caja/almacén. Se requiere autorización de excepción para el trabajador." 
+            error: "Advertencia de Segregación de Funciones: El auditor asignado es el operador principal de caja/almacén. Se requiere autorización de excepción para el trabajador en conteo visible." 
           });
         }
       }
@@ -7680,9 +7688,6 @@ DIRECTIVAS CRÍTICAS:
       if (products.length === 0) {
         return res.status(400).json({ error: "No hay productos disponibles para auditar en el alcance seleccionado." });
       }
-
-      // Si es admin, por defecto es modo STANDARD (Con Visibilidad de Stock), a menos que especifique BLIND explícitamente
-      const finalMode = mode ? mode : (isAdmin ? 'STANDARD' : 'BLIND');
 
       const transaction = db.transaction(() => {
         const result = db.prepare(`

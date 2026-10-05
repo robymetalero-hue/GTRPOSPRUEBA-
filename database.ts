@@ -422,126 +422,24 @@ try {
 } catch (e: any) {}
 
 try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN category_filter TEXT DEFAULT NULL");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN mode TEXT DEFAULT 'BLIND'");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN auditor_name TEXT DEFAULT NULL");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN store_name TEXT DEFAULT 'Almacén Principal'");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN override_segregation INTEGER DEFAULT 0");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN override_reason TEXT DEFAULT NULL");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN exclude_zero_stock INTEGER DEFAULT 1");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN sort_order TEXT DEFAULT 'category_name'");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN approved_at DATETIME DEFAULT NULL");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_counts ADD COLUMN approved_by_username TEXT DEFAULT NULL");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_count_items ADD COLUMN expected_quantity_snapshot INTEGER DEFAULT 0");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_count_items ADD COLUMN movements_during_count INTEGER DEFAULT 0");
-} catch (e: any) {}
-
-try {
-  db.exec("ALTER TABLE inventory_count_items ADD COLUMN recount_requested INTEGER DEFAULT 0");
-} catch (e: any) {}
-
-// Create Cash Accounts & Movements & Settlements tables
-try {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS cash_accounts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      seller_id INTEGER UNIQUE,
-      seller_username TEXT,
-      current_balance REAL DEFAULT 0.0,
-      last_settlement_at DATETIME DEFAULT NULL,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-} catch (e: any) {
-  console.error("Error creating cash_accounts:", e.message);
-}
-
-try {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS cash_movements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      seller_id INTEGER,
-      sale_id INTEGER,
-      type TEXT, -- 'venta', 'devolucion', 'ajuste', 'ingreso_manual', 'retiro_manual'
-      amount REAL,
-      currency TEXT DEFAULT 'BOB',
-      payment_method TEXT,
-      status TEXT DEFAULT 'pendiente', -- 'pendiente', 'liquidado'
-      notes TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-} catch (e: any) {
-  console.error("Error creating cash_movements:", e.message);
-}
-
-try {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS cash_settlements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      seller_id INTEGER,
-      seller_username TEXT,
-      admin_id INTEGER,
-      admin_username TEXT,
-      period_start DATETIME,
-      period_end DATETIME,
-      calculated_amount REAL,
-      delivered_amount REAL,
-      difference REAL,
-      notes TEXT,
-      sale_ids TEXT, -- JSON array of sale IDs
-      status TEXT, -- 'confirmada', 'con_diferencia', 'anulada_admin'
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-} catch (e: any) {
-  console.error("Error creating cash_settlements:", e.message);
-}
-
-// Create Inventory Physical Count tables
-try {
   db.exec(`
     CREATE TABLE IF NOT EXISTS inventory_counts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
       username TEXT,
+      auditor_name TEXT DEFAULT NULL,
+      store_name TEXT DEFAULT 'Almacén Principal',
       status TEXT DEFAULT 'en_progreso', -- 'en_progreso', 'pausado', 'finalizado', 'revisado_admin', 'cerrado', 'cancelado'
+      mode TEXT DEFAULT 'BLIND', -- 'BLIND', 'STANDARD'
+      override_segregation INTEGER DEFAULT 0,
+      override_reason TEXT DEFAULT NULL,
+      exclude_zero_stock INTEGER DEFAULT 1,
+      sort_order TEXT DEFAULT 'category_name',
       notes TEXT,
       started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       completed_at DATETIME DEFAULT NULL,
+      approved_at DATETIME DEFAULT NULL,
+      approved_by_username TEXT DEFAULT NULL,
       total_products INTEGER DEFAULT 0,
       reviewed_products INTEGER DEFAULT 0,
       correct_products INTEGER DEFAULT 0,
@@ -562,10 +460,13 @@ try {
       product_name TEXT,
       product_sku TEXT,
       expected_quantity INTEGER DEFAULT 0,
+      expected_quantity_snapshot INTEGER DEFAULT 0,
       physical_quantity INTEGER DEFAULT 0,
       difference INTEGER DEFAULT 0,
       status TEXT DEFAULT 'pendiente', -- 'pendiente', 'correcto', 'diferencia', 'no_encontrado', 'requiere_revision'
+      movements_during_count INTEGER DEFAULT 0,
       had_movements_during_count INTEGER DEFAULT 0,
+      recount_requested INTEGER DEFAULT 0,
       notes TEXT,
       reviewed_at DATETIME DEFAULT NULL
     );
@@ -573,6 +474,47 @@ try {
 } catch (e: any) {
   console.error("Error creating inventory_count_items:", e.message);
 }
+
+// Ensure columns exist on legacy tables
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN category_filter TEXT DEFAULT NULL");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN mode TEXT DEFAULT 'BLIND'");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN auditor_name TEXT DEFAULT NULL");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN store_name TEXT DEFAULT 'Almacén Principal'");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN override_segregation INTEGER DEFAULT 0");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN override_reason TEXT DEFAULT NULL");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN exclude_zero_stock INTEGER DEFAULT 1");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN sort_order TEXT DEFAULT 'category_name'");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN approved_at DATETIME DEFAULT NULL");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN approved_by_username TEXT DEFAULT NULL");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_count_items ADD COLUMN expected_quantity_snapshot INTEGER DEFAULT 0");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_count_items ADD COLUMN movements_during_count INTEGER DEFAULT 0");
+} catch (e: any) {}
+try {
+  db.exec("ALTER TABLE inventory_count_items ADD COLUMN recount_requested INTEGER DEFAULT 0");
+} catch (e: any) {}
 
 // Create System Audit Logs table for advanced immutable auditing
 try {
