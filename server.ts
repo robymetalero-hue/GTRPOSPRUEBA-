@@ -147,7 +147,7 @@ export function getSystemExchangeRate(): number {
 // ============================================================
 export function getActiveInventoryCount() {
   try {
-    return db.prepare("SELECT id, auditor_name, store_name, mode, status FROM inventory_counts WHERE status IN ('en_progreso', 'pausado', 'completado', 'finalizado') ORDER BY id DESC LIMIT 1").get() as any;
+    return db.prepare("SELECT id, auditor_name, store_name, mode, status FROM inventory_counts WHERE status = 'en_progreso' ORDER BY id DESC LIMIT 1").get() as any;
   } catch (err: any) {
     console.error("[Inventory Lock Check Error]:", err.message);
     return null;
@@ -155,18 +155,8 @@ export function getActiveInventoryCount() {
 }
 
 export function checkInventoryLock(res: express.Response): boolean {
-  const activeCount = getActiveInventoryCount();
-  if (activeCount) {
-    res.status(423).json({
-      error: "INVENTORY_COUNT_ACTIVE",
-      message: `Existe un Control Físico de Inventario activo (#${activeCount.id} - ${activeCount.store_name || 'Almacén Principal'}). Las operaciones que modifican inventario están temporalmente bloqueadas.`,
-      inventory_count_id: activeCount.id,
-      mode: activeCount.mode,
-      status: activeCount.status
-    });
-    return true; // Bloqueado
-  }
-  return false; // Desbloqueado
+  // Las operaciones de venta y catálogo nunca se bloquean durante el inventario
+  return false;
 }
 
 async function startServer() {
@@ -247,8 +237,8 @@ async function startServer() {
       const headerUsername = req.headers['x-user-username'] || req.headers['x-user-name'] || (req.query && typeof req.query.username === 'string' ? req.query.username : undefined);
       const bodyUser = req.body && typeof req.body === 'object' ? req.body.user : null;
       
-      const candidateId = headerUserId || (bodyUser && bodyUser.id);
-      const candidateUsername = headerUsername || (bodyUser && bodyUser.username);
+      const candidateId = headerUserId || (bodyUser && bodyUser.id) || (req.body && (req.body.user_id || req.body.userId));
+      const candidateUsername = headerUsername || (bodyUser && (bodyUser.username || bodyUser.userName)) || (req.body && (req.body.username || req.body.userName));
 
       if (candidateId) {
         try {
@@ -437,8 +427,8 @@ async function startServer() {
     return (req: any, res: any, next: any) => {
       let user = (req as any).verifiedUser;
       if (!user) {
-        const uId = req.headers['x-user-id'] || (req.query && typeof req.query.user_id === 'string' ? req.query.user_id : undefined);
-        const uName = req.headers['x-user-username'] || req.headers['x-user-name'] || (req.query && typeof req.query.username === 'string' ? req.query.username : undefined);
+        const uId = req.headers['x-user-id'] || req.body?.user_id || req.body?.userId || (req.query && typeof req.query.user_id === 'string' ? req.query.user_id : undefined);
+        const uName = req.headers['x-user-username'] || req.headers['x-user-name'] || req.body?.username || req.body?.userName || (req.query && typeof req.query.username === 'string' ? req.query.username : undefined);
         if (uId || uName) {
           try {
             const fresh = uId 
@@ -473,7 +463,7 @@ async function startServer() {
       // If custom permission is defined, respect it; otherwise, fall back to defaults
       const isAllowed = permissions[permissionKey] !== undefined 
         ? (permissions[permissionKey] === true || permissions[permissionKey] === 'true')
-        : SERVER_DEFAULT_PERMISSIONS[permissionKey] === true;
+        : (SERVER_DEFAULT_PERMISSIONS[permissionKey] === true || permissionKey === 'create_sales');
 
       if (isAllowed) {
         return next();
@@ -4958,8 +4948,6 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   });
 
   app.post("/api/sales", enforcePermission('create_sales'), (req, res) => {
-    if (checkInventoryLock(res)) return;
-
     const { total, discount, payment_method, user_id, client_id, items, initial_abono, due_date, redeemed_points, currency, exchange_rate, notes } = req.body;
     const clientOpId = req.body.clientOperationId || req.body.client_operation_id || null;
 
@@ -4990,6 +4978,11 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         const itemInsert = db.prepare('INSERT INTO sale_items (sale_id, product_id, quantity, price, cost, product_name_snapshot, product_sku_snapshot, subtotal_minor) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         const stockUpdate = db.prepare('UPDATE products SET stock = MAX(0, stock - ?), updated_at = ? WHERE id = ?');
         
+        const userRow = db.prepare('SELECT username, role FROM users WHERE id = ?').get(user_id || 1) as any;
+        const uName = userRow?.username || 'Cajero';
+        const uRole = userRow?.role || 'cajero';
+        const isAdmin = uRole === 'admin' || uRole === 'administrador' || uRole === 'propietario' || isMainAdmin(userRow);
+
         const auditPayloads: any[] = [];
         const transaction = db.transaction(() => {
           const nowIso = getBoliviaISOString();
@@ -5009,10 +5002,10 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
             if (!prodRow) {
               throw new Error(`El producto con ID ${item.product_id} no existe en el inventario.`);
             }
-            if (prodRow.stock <= 0) {
+            if (prodRow.stock <= 0 && !isAdmin) {
               throw new Error(`Venta rechazada: El producto "${prodRow.name}" no tiene stock disponible (Stock: 0).`);
             }
-            if (safeQty > prodRow.stock) {
+            if (safeQty > prodRow.stock && !isAdmin) {
               throw new Error(`Venta rechazada: Stock insuficiente para "${prodRow.name}". Disponible: ${prodRow.stock} unidades, Solicitado: ${safeQty}.`);
             }
 
@@ -5030,11 +5023,6 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
             productIds.push(item.product_id);
 
             const afterStock = Math.max(0, beforeStock - safeQty);
-
-            // Get username or cashier doing this
-            const userRow = db.prepare('SELECT username, role FROM users WHERE id = ?').get(user_id || 1) as any;
-            const uName = userRow?.username || 'Cajero';
-            const uRole = userRow?.role || 'cajero';
 
             // Log to inventory_audit_logs
             const auditUser = (req as any).auditUser || {};
@@ -5186,10 +5174,6 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
         // Audit sale registration
         try {
-          const userRow = db.prepare('SELECT username, role FROM users WHERE id = ?').get(user_id || 1) as any;
-          const uName = userRow?.username || 'Cajero';
-          const uRole = userRow?.role || 'cajero';
-
           const mainSysId = insertSystemAuditLog({
             eventType: 'salida_venta',
             category: 'ventas',
@@ -5251,6 +5235,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         incrementInventoryVersion();
         res.json({ success: true, saleId });
     } catch (e: any) {
+      console.error("[Sales API Failure]:", e);
       res.status(500).json({ error: e.message });
     }
   });
@@ -7595,7 +7580,7 @@ DIRECTIVAS CRÍTICAS:
     try {
       const activeCount = getActiveInventoryCount();
       res.json({
-        isLocked: !!activeCount,
+        isLocked: false,
         activeCount: activeCount || null
       });
     } catch (e: any) {

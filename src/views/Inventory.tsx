@@ -1932,20 +1932,11 @@ export default function Inventory() {
                                         {/* Submit button */}
                                         <button
                                             type="submit"
-                                            disabled={isSubmittingStockIn || !selectedProductForStockIn || !stockInQuantity || inventoryLock?.isLocked}
-                                            className={`w-full mt-2 py-3 font-extrabold text-xs rounded-xl shadow-lg transition duration-150 text-center flex items-center justify-center gap-1.5 select-none ${
-                                                inventoryLock?.isLocked 
-                                                    ? 'bg-amber-600/80 text-white cursor-not-allowed opacity-80' 
-                                                    : 'bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white cursor-pointer'
-                                            }`}
+                                            disabled={isSubmittingStockIn || !selectedProductForStockIn || !stockInQuantity}
+                                            className="w-full mt-2 py-3 font-extrabold text-xs rounded-xl shadow-lg transition duration-150 text-center flex items-center justify-center gap-1.5 select-none bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white cursor-pointer"
                                         >
                                             {isSubmittingStockIn ? (
                                                 "Guardando lote..."
-                                            ) : inventoryLock?.isLocked ? (
-                                                <>
-                                                    <AlertTriangle size={14} />
-                                                    <span>Pausado por Control Físico Activo (#{inventoryLock.activeCount?.id})</span>
-                                                </>
                                             ) : (
                                                 "Ingresar Unidades al Inventario"
                                             )}

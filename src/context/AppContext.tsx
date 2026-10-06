@@ -1254,7 +1254,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (res.ok) {
                 const data = await res.json();
                 setInventoryLock({
-                    isLocked: Boolean(data.isLocked),
+                    isLocked: false,
                     activeCount: data.activeCount || null
                 });
             }

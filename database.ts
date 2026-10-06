@@ -275,7 +275,50 @@ db.exec(`
     created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S-04:00', 'now', '-4 hours'))
   );
 
+  CREATE TABLE IF NOT EXISTS cash_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER UNIQUE,
+    seller_username TEXT,
+    current_balance REAL DEFAULT 0.0,
+    last_settlement_at DATETIME DEFAULT NULL,
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S-04:00', 'now', '-4 hours'))
+  );
+
+  CREATE TABLE IF NOT EXISTS cash_movements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER,
+    sale_id INTEGER,
+    type TEXT, -- 'venta', 'devolucion', 'ajuste', 'ingreso_manual', 'retiro_manual'
+    amount REAL,
+    currency TEXT DEFAULT 'BOB',
+    payment_method TEXT,
+    status TEXT DEFAULT 'pendiente', -- 'pendiente', 'liquidado'
+    notes TEXT,
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S-04:00', 'now', '-4 hours'))
+  );
+
+  CREATE TABLE IF NOT EXISTS cash_settlements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER,
+    seller_username TEXT,
+    admin_id INTEGER,
+    admin_username TEXT,
+    period_start DATETIME,
+    period_end DATETIME,
+    calculated_amount REAL,
+    delivered_amount REAL,
+    difference REAL,
+    notes TEXT,
+    sale_ids TEXT, -- JSON array of sale IDs
+    status TEXT, -- 'confirmada', 'con_diferencia', 'anulada_admin'
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S-04:00', 'now', '-4 hours'))
+  );
+
   -- High-Performance Database Indexes
+  CREATE INDEX IF NOT EXISTS idx_cash_accounts_seller_id ON cash_accounts (seller_id);
+  CREATE INDEX IF NOT EXISTS idx_cash_movements_seller_id ON cash_movements (seller_id);
+  CREATE INDEX IF NOT EXISTS idx_cash_movements_sale_id ON cash_movements (sale_id);
+  CREATE INDEX IF NOT EXISTS idx_cash_settlements_seller_id ON cash_settlements (seller_id);
   CREATE INDEX IF NOT EXISTS idx_offline_pending_sales_status ON offline_pending_sales (status);
   CREATE INDEX IF NOT EXISTS idx_offline_pending_sales_op_id ON offline_pending_sales (client_operation_id);
   CREATE INDEX IF NOT EXISTS idx_deleted_records_lookup ON deleted_records (table_name, record_id);
