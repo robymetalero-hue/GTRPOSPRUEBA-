@@ -8068,19 +8068,32 @@ DIRECTIVAS CRÍTICAS:
       if (status === 'finalizado' || status === 'completado') {
         query += ", completed_at = CURRENT_TIMESTAMP";
 
-        // Recalcular métricas exactas de la sesión al completar
+        // Al finalizar o completar el conteo, evaluar todos los artículos pendientes no contados (físico 0)
+        // contra el stock esperado para registrar su diferencia real y estado
+        db.prepare(`
+          UPDATE inventory_count_items
+          SET 
+            difference = physical_quantity - expected_quantity,
+            status = CASE 
+              WHEN physical_quantity = expected_quantity THEN 'correcto'
+              ELSE 'diferencia'
+            END,
+            reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP)
+          WHERE inventory_count_id = ? AND status = 'pendiente'
+        `).run(id);
+
+        // Recalcular métricas exactas e infalibles de la sesión al completar
         const stats = db.prepare(`
           SELECT 
             COUNT(*) as total,
-            SUM(CASE WHEN status != 'pendiente' THEN 1 ELSE 0 END) as reviewed,
-            SUM(CASE WHEN status = 'correcto' THEN 1 ELSE 0 END) as correct,
-            SUM(CASE WHEN status = 'diferencia' THEN 1 ELSE 0 END) as diff
+            SUM(CASE WHEN physical_quantity = expected_quantity THEN 1 ELSE 0 END) as correct,
+            SUM(CASE WHEN physical_quantity != expected_quantity THEN 1 ELSE 0 END) as diff
           FROM inventory_count_items
           WHERE inventory_count_id = ?
         `).get(id) as any;
 
         const totalProducts = stats?.total || 0;
-        const reviewedProducts = stats?.reviewed || 0;
+        const reviewedProducts = totalProducts;
         const correctProducts = stats?.correct || 0;
         const differenceProducts = stats?.diff || 0;
 

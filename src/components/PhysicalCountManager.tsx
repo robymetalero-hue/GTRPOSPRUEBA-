@@ -419,6 +419,16 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
   const handleCompleteSession = async () => {
     if (!activeSession) return;
+
+    // Si hay productos sin verificar/contar, advertir para evitar faltantes involuntarios
+    const uncounted = sessionItems.filter(it => it.is_checked === 0);
+    if (uncounted.length > 0) {
+      const msg = `Hay ${uncounted.length} artículo(s) que no has contado ni marcado.\n\nSi finalizas ahora, los artículos no contados se registrarán con 0 existencias físicas encontradas.\n\n¿Deseas enviar el conteo de todas formas?`;
+      if (!confirm(msg)) {
+        return;
+      }
+    }
+
     setIsLoading(true);
     try {
       // Si estamos en modo visible para admin, auto-confirmar productos de stock 0 sin movimiento
@@ -859,23 +869,31 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     const totalItems = itemsList.length;
     const checkedItems = itemsList.filter(it => it.is_checked === 1 && it.status !== 'requiere_revision' && !it.recount_requested).length;
     
-    // Visibilidad de stock teórico solo si hay system_stock y la sesión NO está en modo BLIND estricto
-    const itemsWithSysStock = itemsList.filter(it => it.system_stock !== undefined);
-    const hasAdminVisibility = itemsWithSysStock.length > 0 && !isBlindActive;
+    // Visibilidad de stock teórico: en revisión administrativa o completada siempre es visible para auditar
+    const isReviewMode = activeSession?.status === 'completado' || activeSession?.status === 'en_revision' || activeSession?.status === 'finalizado';
+    const itemsWithSysStock = itemsList.filter(it => it.system_stock !== undefined || it.live_stock !== undefined);
+    const hasAdminVisibility = itemsWithSysStock.length > 0 && (isAdmin || isReviewMode || !isBlindActive);
 
-    const pendingItems = hasAdminVisibility
-      ? itemsList.filter(it => ((it.system_stock ?? 0) > 0 && (it.is_checked === 0 || it.status === 'pendiente')) || it.status === 'requiere_revision' || Boolean(it.recount_requested)).length
-      : itemsList.filter(it => it.is_checked === 0 || it.status === 'pendiente' || it.status === 'requiere_revision' || Boolean(it.recount_requested)).length;
+    const pendingItems = itemsList.filter(it => 
+      ((it.system_stock ?? it.live_stock ?? 0) > 0 && (it.is_checked === 0 || it.status === 'pendiente')) || 
+      it.status === 'requiere_revision' || 
+      Boolean(it.recount_requested)
+    ).length;
 
+    // Conteo exacto de productos con diferencia física vs teórica (idéntico a la lógica de reviewItems)
     const productsWithDiff = hasAdminVisibility 
-      ? itemsList.filter(it => it.is_checked === 1 && it.system_stock !== undefined && it.counted_stock !== it.system_stock).length
+      ? itemsList.filter(it => {
+          const sys = it.system_stock ?? it.live_stock ?? 0;
+          const physical = it.counted_stock ?? 0;
+          return physical !== sys;
+        }).length
       : 0;
 
     const totalSystemStock = hasAdminVisibility
-      ? itemsList.reduce((sum, it) => sum + (it.system_stock ?? 0), 0)
+      ? itemsList.reduce((sum, it) => sum + (it.system_stock ?? it.live_stock ?? 0), 0)
       : 0;
 
-    const totalCountedStock = itemsList.reduce((sum, it) => sum + (it.is_checked === 1 ? it.counted_stock : 0), 0);
+    const totalCountedStock = itemsList.reduce((sum, it) => sum + (it.counted_stock ?? 0), 0);
     const totalDiscrepancyUnits = hasAdminVisibility ? totalCountedStock - totalSystemStock : 0;
     const completedPercent = totalItems > 0 ? Math.round((checkedItems / totalItems) * 100) : 0;
 
@@ -1235,15 +1253,27 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         <br />
                         <span className="font-semibold text-slate-700 dark:text-slate-300">Pendiente de revisión administrativa.</span>
                       </p>
-                      {onClose && (
+                      <div className="flex items-center gap-2">
+                        {onClose && (
+                          <button
+                            type="button"
+                            onClick={onClose}
+                            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+                          >
+                            Cerrar Pantalla
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={onClose}
-                          className="px-5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+                          onClick={() => {
+                            setActiveSession(null);
+                            setSessionItems([]);
+                          }}
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs uppercase rounded-xl transition cursor-pointer"
                         >
-                          Cerrar Pantalla
+                          Iniciar Nuevo Conteo
                         </button>
-                      )}
+                      </div>
                     </div>
                   ) : (
                     <div className="bg-white dark:bg-[#11192e] p-4 md:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col gap-3 max-w-2xl w-full">
