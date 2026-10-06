@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { jsPDF } from 'jspdf';
 import { useAppContext } from '../context/AppContext';
 import { safeDispatchEvent } from '../utils/events';
@@ -106,6 +106,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
   // Filtros del listado de conteo activo
   const [itemSearch, setItemSearch] = useState('');
+  const itemDebounceRef = useRef<Record<number, any>>({});
   const [activeFilter, setActiveFilter] = useState<'todos' | 'pendientes' | 'revisados' | 'diferencias' | 'reconteo'>('todos');
   const [adminReviewFilter, setAdminReviewFilter] = useState<'todos' | 'diferencias' | 'coincidentes'>('todos');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('ALL');
@@ -340,7 +341,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     }
   };
 
-  const handleUpdateItem = async (itemId: number, updatedFields: { counted_stock?: number; is_checked?: number; status?: string; notes?: string }) => {
+  const handleUpdateItem = (itemId: number, updatedFields: { counted_stock?: number; is_checked?: number; status?: string; notes?: string }, immediate = false) => {
     if (!activeSession) return;
     const item = sessionItems.find(it => it.id === itemId);
     if (!item) return;
@@ -351,7 +352,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
     const diff = item.system_stock !== undefined ? newStock - item.system_stock : undefined;
 
-    // Actualización optimista inmediata
+    // Actualización optimista inmediata en interfaz
     setSessionItems(prev => prev.map(it => it.id === itemId ? { 
       ...it, 
       counted_stock: newStock,
@@ -362,39 +363,52 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
       notes: updatedFields.notes !== undefined ? updatedFields.notes : it.notes
     } : it));
 
-    try {
-      const res = await fetch(`/api/inventory-counts/${activeSession.id}/items/${itemId}`, {
-        method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-user-role': user?.role || ''
-        },
-        body: JSON.stringify({ 
-          physical_quantity: newStock,
-          status: nextStatus,
-          notes: updatedFields.notes !== undefined ? updatedFields.notes : item.notes
-        })
-      });
-      if (!res.ok) {
-        console.error("Failed to update count item on server");
+    if (itemDebounceRef.current[itemId]) {
+      clearTimeout(itemDebounceRef.current[itemId]);
+    }
+
+    const sendRequest = async () => {
+      try {
+        const res = await fetch(`/api/inventory-counts/${activeSession.id}/items/${itemId}`, {
+          method: 'PUT',
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-user-role': user?.role || ''
+          },
+          body: JSON.stringify({ 
+            physical_quantity: newStock,
+            status: nextStatus,
+            notes: updatedFields.notes !== undefined ? updatedFields.notes : item.notes
+          })
+        });
+        if (!res.ok) {
+          console.error("Failed to update count item on server");
+        }
+      } catch (err) {
+        console.error("Network error while updating count item:", err);
       }
-    } catch (err) {
-      console.error("Network error while updating count item:", err);
+    };
+
+    if (immediate) {
+      sendRequest();
+    } else {
+      itemDebounceRef.current[itemId] = setTimeout(sendRequest, 250);
     }
   };
 
   const handleToggleCheck = async (item: CountItem) => {
     const isChecked = item.is_checked === 1;
     if (isChecked) {
-      await handleUpdateItem(item.id, { is_checked: 0, status: 'pendiente' });
+      handleUpdateItem(item.id, { is_checked: 0, status: 'pendiente' }, true);
     } else {
-      await handleUpdateItem(item.id, { is_checked: 1, status: 'contado' });
+      const currentCount = item.counted_stock ?? 0;
+      handleUpdateItem(item.id, { counted_stock: currentCount, is_checked: 1, status: 'contado' }, true);
     }
   };
 
   const handleSetStockToSystem = async (item: CountItem) => {
     if (item.system_stock === undefined || isBlindActive) return;
-    await handleUpdateItem(item.id, { counted_stock: item.system_stock, is_checked: 1, status: 'contado' });
+    handleUpdateItem(item.id, { counted_stock: item.system_stock, is_checked: 1, status: 'contado' }, true);
   };
 
   const handleMatchAllPending = async () => {
@@ -410,7 +424,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     setIsLoading(true);
     for (const item of pending) {
       if (item.system_stock !== undefined) {
-        await handleUpdateItem(item.id, { counted_stock: item.system_stock, is_checked: 1, status: 'contado' });
+        handleUpdateItem(item.id, { counted_stock: item.system_stock, is_checked: 1, status: 'contado' }, true);
       }
     }
     setIsLoading(false);
@@ -420,13 +434,22 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const handleCompleteSession = async () => {
     if (!activeSession) return;
 
-    // Si hay productos sin verificar/contar, advertir para evitar faltantes involuntarios
+    let uncountedAction = 'omit';
     const uncounted = sessionItems.filter(it => it.is_checked === 0);
     if (uncounted.length > 0) {
-      const msg = `Hay ${uncounted.length} artículo(s) que no has contado ni marcado.\n\nSi finalizas ahora, los artículos no contados se registrarán con 0 existencias físicas encontradas.\n\n¿Deseas enviar el conteo de todas formas?`;
-      if (!confirm(msg)) {
+      const countedCount = sessionItems.length - uncounted.length;
+      const confirmSend = confirm(
+        `📋 Resumen de Conteo Físico:\n\n` +
+        `• Artículos contados: ${countedCount} de ${sessionItems.length}\n` +
+        `• Artículos no contados: ${uncounted.length}\n\n` +
+        `¿Deseas enviar el reporte con solo los ${countedCount} artículos contados?\n\n` +
+        `✓ [Aceptar]: Los artículos no contados mantendrán su stock actual del sistema sin generar faltantes falsos.\n` +
+        `✕ [Cancelar]: Continuar contando en tienda.`
+      );
+      if (!confirmSend) {
         return;
       }
+      uncountedAction = 'omit';
     }
 
     setIsLoading(true);
@@ -435,7 +458,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
       if (activeSummary.hasAdminVisibility && !isBlindActive) {
         const uncountedZeroItems = sessionItems.filter(it => (it.system_stock ?? 0) <= 0 && it.is_checked === 0);
         for (const zItem of uncountedZeroItems) {
-          await handleUpdateItem(zItem.id, { counted_stock: 0, is_checked: 1, status: 'contado' });
+          handleUpdateItem(zItem.id, { counted_stock: 0, is_checked: 1, status: 'contado' }, true);
         }
       }
 
@@ -447,7 +470,8 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         },
         body: JSON.stringify({ 
           status: 'completado',
-          auto_apply: false // NUNCA auto-aplicar al enviar; la aprobación debe ser explícita
+          auto_apply: false, // NUNCA auto-aplicar al enviar; la aprobación debe ser explícita
+          uncounted_action: uncountedAction
         })
       });
 
@@ -455,7 +479,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         showNotification?.(
           isAdmin 
             ? "✓ Conteo físico completado. Revisa las diferencias antes de conciliar."
-            : "✓ Conteo físico finalizado. Reporte enviado a Administración.", 
+            : "✓ Conteo físico finalizado. Reporte enviado a Administración sin discrepancias artificiales.", 
           "success"
         );
         await fetchProducts();
@@ -883,6 +907,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     // Conteo exacto de productos con diferencia física vs teórica (idéntico a la lógica de reviewItems)
     const productsWithDiff = hasAdminVisibility 
       ? itemsList.filter(it => {
+          if (it.status === 'omitido') return false;
           const sys = it.system_stock ?? it.live_stock ?? 0;
           const physical = it.counted_stock ?? 0;
           return physical !== sys;
@@ -987,10 +1012,10 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   // Lista de artículos para la revisión del Administrador según el filtro seleccionado
   const reviewItems = useMemo(() => {
     if (adminReviewFilter === 'diferencias') {
-      return sessionItems.filter(it => it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0));
+      return sessionItems.filter(it => it.status !== 'omitido' && it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0));
     }
     if (adminReviewFilter === 'coincidentes') {
-      return sessionItems.filter(it => it.counted_stock === (it.system_stock ?? it.live_stock ?? 0));
+      return sessionItems.filter(it => it.status !== 'omitido' && it.counted_stock === (it.system_stock ?? it.live_stock ?? 0));
     }
     return sessionItems;
   }, [sessionItems, adminReviewFilter]);
@@ -1900,7 +1925,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                               <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-xl p-0.5 border border-slate-200 dark:border-slate-700 shrink-0">
                                 <button
                                   type="button"
-                                  onClick={() => handleUpdateItem(it.id, { counted_stock: Math.max(0, physical - 1), is_checked: 1, status: 'contado' })}
+                                  onClick={() => handleUpdateItem(it.id, { counted_stock: Math.max(0, physical - 1), is_checked: 1, status: 'contado' }, true)}
                                   className="w-8 h-8 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-base flex items-center justify-center hover:bg-slate-200 dark:hover:bg-slate-600 transition active:scale-90 cursor-pointer shadow-xs"
                                   title="Restar 1"
                                 >
@@ -1915,13 +1940,18 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                                   placeholder="—"
                                   value={isPending ? '' : physical}
                                   onFocus={e => e.target.select()}
+                                  onBlur={() => {
+                                    if (!isPending) {
+                                      handleUpdateItem(it.id, { counted_stock: physical, is_checked: 1, status: 'contado' }, true);
+                                    }
+                                  }}
                                   onChange={e => {
                                     const raw = e.target.value;
                                     if (raw === '') {
-                                      handleUpdateItem(it.id, { counted_stock: 0, is_checked: 0, status: 'pendiente' });
+                                      handleUpdateItem(it.id, { counted_stock: 0, is_checked: 0, status: 'pendiente' }, false);
                                     } else {
                                       const val = parseInt(raw, 10);
-                                      handleUpdateItem(it.id, { counted_stock: isNaN(val) ? 0 : Math.max(0, val), is_checked: 1, status: 'contado' });
+                                      handleUpdateItem(it.id, { counted_stock: isNaN(val) ? 0 : Math.max(0, val), is_checked: 1, status: 'contado' }, false);
                                     }
                                   }}
                                   className="w-12 h-8 text-center font-mono font-black text-xs sm:text-sm bg-transparent text-slate-900 dark:text-white focus:outline-none placeholder:text-slate-300 dark:placeholder:text-slate-600"
@@ -1929,7 +1959,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
                                 <button
                                   type="button"
-                                  onClick={() => handleUpdateItem(it.id, { counted_stock: isPending ? 1 : physical + 1, is_checked: 1, status: 'contado' })}
+                                  onClick={() => handleUpdateItem(it.id, { counted_stock: isPending ? 1 : physical + 1, is_checked: 1, status: 'contado' }, true)}
                                   className="w-8 h-8 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-base flex items-center justify-center hover:bg-slate-200 dark:hover:bg-slate-600 transition active:scale-90 cursor-pointer shadow-xs"
                                   title="Sumar 1"
                                 >

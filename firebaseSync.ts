@@ -766,7 +766,7 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
               try {
                 const localCount = db.prepare("SELECT status FROM inventory_counts WHERE id = ?").get(docId) as any;
                 if (localCount && ['cancelado', 'aprobado', 'cerrado'].includes(localCount.status)) {
-                  if (['en_progreso', 'pausado'].includes(data.status)) {
+                  if (['en_progreso', 'pausado', 'completado'].includes(data.status)) {
                     console.log(`[Sync Count Shield] Retaining local resolved status "${localCount.status}" for count #${docId} over stale remote "${data.status}".`);
                     continue;
                   }

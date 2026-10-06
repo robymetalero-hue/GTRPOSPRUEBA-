@@ -8068,32 +8068,50 @@ DIRECTIVAS CRÍTICAS:
       if (status === 'finalizado' || status === 'completado') {
         query += ", completed_at = CURRENT_TIMESTAMP";
 
-        // Al finalizar o completar el conteo, evaluar todos los artículos pendientes no contados (físico 0)
-        // contra el stock esperado para registrar su diferencia real y estado
-        db.prepare(`
-          UPDATE inventory_count_items
-          SET 
-            difference = physical_quantity - expected_quantity,
-            status = CASE 
-              WHEN physical_quantity = expected_quantity THEN 'correcto'
-              ELSE 'diferencia'
-            END,
-            reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP)
-          WHERE inventory_count_id = ? AND status = 'pendiente'
-        `).run(id);
+        const uncountedAction = req.body.uncounted_action || 'omit';
 
-        // Recalcular métricas exactas e infalibles de la sesión al completar
+        if (uncountedAction === 'zero') {
+          // El operador confirmó explícitamente que los productos no contados no existen en tienda (0 físico)
+          db.prepare(`
+            UPDATE inventory_count_items
+            SET 
+              physical_quantity = 0,
+              difference = 0 - expected_quantity,
+              status = CASE 
+                WHEN expected_quantity = 0 THEN 'correcto'
+                ELSE 'diferencia'
+              END,
+              reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP)
+            WHERE inventory_count_id = ? AND status = 'pendiente'
+          `).run(id);
+        } else {
+          // Modo seguro por defecto: Los productos no contados se excluyen de diferencias
+          // Se preserva su stock del sistema para no generar faltantes falsos al administrador
+          db.prepare(`
+            UPDATE inventory_count_items
+            SET 
+              physical_quantity = expected_quantity,
+              difference = 0,
+              status = 'omitido',
+              notes = COALESCE(notes || ' | ', '') || '[No verificado en esta sesión]',
+              reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP)
+            WHERE inventory_count_id = ? AND status = 'pendiente'
+          `).run(id);
+        }
+
+        // Recalcular métricas exactas de la sesión al completar
         const stats = db.prepare(`
           SELECT 
             COUNT(*) as total,
-            SUM(CASE WHEN physical_quantity = expected_quantity THEN 1 ELSE 0 END) as correct,
-            SUM(CASE WHEN physical_quantity != expected_quantity THEN 1 ELSE 0 END) as diff
+            SUM(CASE WHEN status NOT IN ('pendiente', 'omitido') THEN 1 ELSE 0 END) as reviewed,
+            SUM(CASE WHEN status = 'correcto' THEN 1 ELSE 0 END) as correct,
+            SUM(CASE WHEN status = 'diferencia' THEN 1 ELSE 0 END) as diff
           FROM inventory_count_items
           WHERE inventory_count_id = ?
         `).get(id) as any;
 
         const totalProducts = stats?.total || 0;
-        const reviewedProducts = totalProducts;
+        const reviewedProducts = stats?.reviewed || 0;
         const correctProducts = stats?.correct || 0;
         const differenceProducts = stats?.diff || 0;
 
