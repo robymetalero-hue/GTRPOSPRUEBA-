@@ -7679,10 +7679,14 @@ DIRECTIVAS CRÍTICAS:
       }
 
       let products: any[] = [];
+      const excludeZero = (finalMode === 'BLIND') || (req.body.exclude_zero_stock === true || req.body.exclude_zero_stock === 1);
+      const stockCondition = excludeZero ? ' AND stock > 0' : '';
+      const baseStockCond = excludeZero ? ' WHERE stock > 0' : '';
+
       if (category_filter && category_filter !== 'Todos') {
-        products = db.prepare('SELECT id, name, sku, stock, category FROM products WHERE category = ?').all(category_filter) as any[];
+        products = db.prepare(`SELECT id, name, sku, stock, category FROM products WHERE category = ?${stockCondition}`).all(category_filter) as any[];
       } else {
-        products = db.prepare('SELECT id, name, sku, stock, category FROM products').all() as any[];
+        products = db.prepare(`SELECT id, name, sku, stock, category FROM products${baseStockCond}`).all() as any[];
       }
 
       if (products.length === 0) {
@@ -7693,9 +7697,9 @@ DIRECTIVAS CRÍTICAS:
         const result = db.prepare(`
           INSERT INTO inventory_counts (
             user_id, username, auditor_name, store_name, notes, status, 
-            mode, override_segregation, override_reason, started_at, total_products, category_filter
+            mode, override_segregation, override_reason, started_at, total_products, category_filter, exclude_zero_stock
           ) 
-          VALUES (?, ?, ?, ?, ?, 'en_progreso', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+          VALUES (?, ?, ?, ?, ?, 'en_progreso', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
         `).run(
           user_id || 1, 
           username || 'admin', 
@@ -7706,7 +7710,8 @@ DIRECTIVAS CRÍTICAS:
           override_segregation ? 1 : 0, 
           override_reason || null, 
           products.length, 
-          category_filter || null
+          category_filter || null,
+          excludeZero ? 1 : 0
         );
         
         const countId = result.lastInsertRowid;
@@ -7772,11 +7777,15 @@ DIRECTIVAS CRÍTICAS:
       // Si la sesión está activa, asegurarse de que todos los productos del alcance existan en inventory_count_items
       if (count.status === 'en_progreso' || count.status === 'pausado') {
         try {
+          const excludeZero = (count.mode === 'BLIND') || Boolean(count.exclude_zero_stock);
+          const stockCondition = excludeZero ? ' AND stock > 0' : '';
+          const baseStockCond = excludeZero ? ' WHERE stock > 0' : '';
+
           let currentProducts: any[] = [];
           if (count.category_filter && count.category_filter !== 'Todos') {
-            currentProducts = db.prepare('SELECT id, name, sku, stock, category FROM products WHERE category = ?').all(count.category_filter) as any[];
+            currentProducts = db.prepare(`SELECT id, name, sku, stock, category FROM products WHERE category = ?${stockCondition}`).all(count.category_filter) as any[];
           } else {
-            currentProducts = db.prepare('SELECT id, name, sku, stock, category FROM products').all() as any[];
+            currentProducts = db.prepare(`SELECT id, name, sku, stock, category FROM products${baseStockCond}`).all() as any[];
           }
 
           const existingItems = db.prepare('SELECT product_id FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];

@@ -941,6 +941,13 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     return sessionItems.filter(it => it.recount_requested === 1 || it.status === 'requiere_revision').length;
   }, [sessionItems]);
 
+  // Si la administración solicitó reconteo para la sesión activa, enfocar automáticamente en la pestaña de Reconteo
+  useEffect(() => {
+    if (activeSession && activeSession.status === 'en_progreso' && recountItemsCount > 0) {
+      setActiveFilter('reconteo');
+    }
+  }, [activeSession?.id, activeSession?.status, recountItemsCount]);
+
   // Separación clara de productos: Con existencias (>0) vs Apartado Especial Stock 0 (<=0)
   // En MODO BLIND: NO SE SEPARA, para no revelar la existencia teórica al auditor
   const { itemsWithStock, itemsZeroStock } = useMemo(() => {
@@ -957,10 +964,17 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     return { itemsWithStock: withStock, itemsZeroStock: zeroStock };
   }, [sessionItems]);
 
-  // Selección de la lista a mostrar según el apartado activo (en BLIND siempre es la lista completa)
-  const currentSectionItems = (isBlindActive || !activeSummary.hasAdminVisibility) 
-    ? sessionItems 
-    : (stockSection === 'with_stock' ? itemsWithStock : itemsZeroStock);
+  // Selección de la lista a mostrar según el apartado activo (en BLIND se excluyen artículos con stock <= 0)
+  const currentSectionItems = useMemo(() => {
+    if (isBlindActive) {
+      // En modo a ciegas, excluir productos con stock 0 para evitar pérdidas de tiempo y confusiones
+      return sessionItems.filter(it => (it.system_stock ?? it.live_stock ?? 0) > 0);
+    }
+    if (!activeSummary.hasAdminVisibility) {
+      return sessionItems;
+    }
+    return stockSection === 'with_stock' ? itemsWithStock : itemsZeroStock;
+  }, [isBlindActive, activeSummary.hasAdminVisibility, sessionItems, stockSection, itemsWithStock, itemsZeroStock]);
 
   // Lista de categorías únicas presentes en la sección activa
   const activeSessionCategories = useMemo(() => {
