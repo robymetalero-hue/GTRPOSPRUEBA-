@@ -1398,7 +1398,11 @@ export default function Inventory() {
 
                 setIsFormOpen(false);
                 setDuplicateModalData(null);
-                fetchProducts();
+                try {
+                    sessionStorage.removeItem('last_catalog_version');
+                    sessionStorage.removeItem('last_inventory_version');
+                } catch (_) {}
+                fetchProducts(undefined, true);
             } else {
                 if (data.duplicateWarning && data.existingProduct) {
                     setDuplicateModalData({
@@ -2239,13 +2243,23 @@ export default function Inventory() {
                             Para evitar duplicar registros y mantener el inventario 100% preciso, no se permite crear dos productos con el mismo nombre. Puedes abrir el producto existente para editarlo o cambiar el nombre del nuevo artículo.
                         </p>
 
-                        <div className="flex justify-end gap-2.5 pt-2">
+                        <div className="flex flex-wrap justify-end gap-2.5 pt-2">
                             <button
                                 type="button"
                                 onClick={() => setDuplicateModalData(null)}
                                 className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
                             >
                                 Modificar Datos
+                            </button>
+                            <button
+                                type="button"
+                                onClick={(e) => {
+                                    setDuplicateModalData(null);
+                                    handleSave(e, true);
+                                }}
+                                className="px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                            >
+                                Registrar de Todos Modos
                             </button>
                             <button
                                 type="button"

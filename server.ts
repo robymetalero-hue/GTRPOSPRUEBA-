@@ -2612,7 +2612,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     const normInput = normalizeProductName(trimmedName);
     const allProds = db.prepare('SELECT id, name, sku, stock, price_unit FROM products').all() as any[];
     const existingNameMatch = allProds.find(p => normalizeProductName(p.name) === normInput);
-    if (existingNameMatch) {
+    if (existingNameMatch && !forceCreate) {
       return res.status(400).json({
         duplicateWarning: true,
         error: `Ya existe un producto registrado con el nombre "${existingNameMatch.name}" (#${existingNameMatch.id}, SKU: ${existingNameMatch.sku}). No se permiten productos duplicados con el mismo nombre.`,
@@ -2694,6 +2694,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         if (invLogId) syncMap.inventory_audit_logs = [invLogId];
 
         syncAfterWrite(syncMap);
+        incrementCatalogVersion();
+        incrementInventoryVersion();
         checkAndNotifyLowStock(newProdId);
 
         const resPayload = { success: true, id: newProdId };
