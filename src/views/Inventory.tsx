@@ -374,7 +374,11 @@ export default function Inventory() {
 
     useEffect(() => {
         const handleInventoryOperation = () => {
-            fetchProducts();
+            try {
+                sessionStorage.removeItem('last_catalog_version');
+                sessionStorage.removeItem('last_inventory_version');
+            } catch (_) {}
+            fetchProducts(undefined, true);
             if (expandedProductId) {
                 fetchProductHistories(expandedProductId);
             }
@@ -864,8 +868,12 @@ export default function Inventory() {
                 setKeepSameCost(true);
                 setNewCostPrice("");
                 
-                // Refresh records
-                fetchProducts();
+                // Refresh records immediately
+                try {
+                    sessionStorage.removeItem('last_catalog_version');
+                    sessionStorage.removeItem('last_inventory_version');
+                } catch (_) {}
+                fetchProducts(undefined, true);
                 loadArrivalHistory();
             } else {
                 const err = await res.json();

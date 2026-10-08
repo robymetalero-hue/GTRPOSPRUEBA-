@@ -22,6 +22,7 @@ export default function DateRangePicker({ value, onChange, className = '' }: Dat
 
     const presets = [
         { id: 'today', name: 'Hoy', icon: Clock },
+        { id: 'yesterday', name: 'Ayer', icon: Clock },
         { id: '7days', name: 'Últimos 7 Días', icon: CalendarDays },
         { id: '30days', name: 'Últimos 30 Días', icon: Calendar },
         { id: 'thisMonth', name: 'Este Mes', icon: Calendar },
@@ -44,6 +45,11 @@ export default function DateRangePicker({ value, onChange, className = '' }: Dat
             return { start: '', end: '' };
         } else if (presetId === 'today') {
             return { start: todayStr, end: todayStr };
+        } else if (presetId === 'yesterday') {
+            const prior = new Date();
+            prior.setDate(today.getDate() - 1);
+            const priorStr = formatDate(prior);
+            return { start: priorStr, end: priorStr };
         } else if (presetId === '7days') {
             const prior = new Date();
             prior.setDate(today.getDate() - 6);

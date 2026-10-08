@@ -1714,7 +1714,11 @@ export default function POS() {
                     setCashReceived("");
                     setUsePoints(false);
                     setPaymentMethod('Efectivo');
-                    fetchProducts(); // update master stock list
+                    try {
+                        sessionStorage.removeItem('last_catalog_version');
+                        sessionStorage.removeItem('last_inventory_version');
+                    } catch (_) {}
+                    fetchProducts(undefined, true); // update master stock list with forced fresh fetch
                     fetchClients();  // update client list suggestions matching new addition
                     setIsCheckoutOpen(false);
                     triggerVibrate([80, 50, 80]);
