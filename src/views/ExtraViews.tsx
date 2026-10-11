@@ -2297,7 +2297,8 @@ export function DevolucionesView() {
                             <div className="flex flex-col gap-2.5 overflow-y-auto max-h-[300px]">
                                 {saleItems.map(item => {
                                     const qtySelected = refundQuantities[item.id] || 0;
-                                    const isFullyRefunded = item.quantity === 0;
+                                    const availableQty = item.available_for_refund !== undefined ? item.available_for_refund : item.quantity;
+                                    const isFullyRefunded = availableQty === 0;
                                     return (
                                         <div key={item.id} className={`flex justify-between items-center p-3 rounded-2xl border ${isFullyRefunded ? 'border-amber-500/20 bg-amber-500/5 dark:bg-amber-950/10' : 'border-slate-150 dark:border-slate-850 bg-slate-50/50 dark:bg-black/10'}`}>
                                             <div className="min-w-0 pr-3">
@@ -2305,12 +2306,12 @@ export function DevolucionesView() {
                                                     <h4 className="font-bold text-xs uppercase text-slate-850 dark:text-slate-200 truncate">{item.product_name}</h4>
                                                     {isFullyRefunded && (
                                                         <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                                                            Devuelto
+                                                            Devuelto Total
                                                         </span>
                                                     )}
                                                 </div>
                                                 <span className="text-[9px] font-bold text-slate-405 block mt-0.5 font-mono">
-                                                    Disponibles p/ devolución: {item.quantity} pz
+                                                    Disponibles p/ devolución: {availableQty} pz {item.returned_quantity > 0 ? `(Devueltas: ${item.returned_quantity} pz)` : `(Venta orig: ${item.quantity} pz)`}
                                                 </span>
                                             </div>
                                             <div className="flex items-center gap-2">
@@ -2323,8 +2324,8 @@ export function DevolucionesView() {
                                                 </button>
                                                 <span className="font-mono text-xs font-extrabold w-5 text-center">{qtySelected}</span>
                                                 <button 
-                                                    onClick={() => incrementRefund(item.id, item.quantity)}
-                                                    disabled={isFullyRefunded || qtySelected >= item.quantity}
+                                                    onClick={() => incrementRefund(item.id, availableQty)}
+                                                    disabled={isFullyRefunded || qtySelected >= availableQty}
                                                     className="w-6 h-6 rounded-lg bg-white dark:bg-slate-900 border text-xs font-black flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40"
                                                 >
                                                     +

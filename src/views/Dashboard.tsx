@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import DateRangePicker, { DateRange } from '../components/DateRangePicker';
 import ThreeDHourlySalesChart from '../components/ThreeDHourlySalesChart';
+import Phase3ResiliencePanel from '../components/Phase3ResiliencePanel';
 import { backupDatabaseToDrive } from "../utils/driveBackup";
 
 const CardSkeleton = () => (
@@ -792,6 +793,9 @@ export default function Dashboard() {
                 </div>
 
             </div>
+
+            {/* Phase 3: Advanced Predictive Analytics & Operational Resilience */}
+            <Phase3ResiliencePanel />
 
             {/* AI Strategic Insights & Recommendations (Gemini Powered) */}
             <div className="bg-gradient-to-br from-indigo-900/20 via-slate-900/40 to-blue-900/20 p-5 md:p-6 rounded-3xl border border-indigo-500/20 shadow-xs relative overflow-hidden">

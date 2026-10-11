@@ -40,7 +40,14 @@ import {
   limit,
   orderBy
 } from 'firebase/firestore';
-import { db } from './database.ts';
+import { db, isCurrentContextSandbox, dbAsyncLocalStorage } from './database.ts';
+
+export function getCollectionName(tableName: string): string {
+  if (isCurrentContextSandbox()) {
+    return `sandbox_${tableName}`;
+  }
+  return tableName;
+}
 import { 
   validateFirestoreWriteOperation, 
   validateRemoteFirestoreDocument,
@@ -170,6 +177,7 @@ export const SYNC_TABLES = [
   'system_audit_logs',
   'inventory_counts',
   'inventory_count_items',
+  'sale_returns',
   'offline_pending_sales',
   'firestore_transaction_ledger'
 ];
@@ -194,6 +202,7 @@ export const APPEND_ONLY_TABLES = [
   'cash_settlements',
   'inventory_audit_logs',
   'system_audit_logs',
+  'sale_returns',
   'firestore_transaction_ledger'
 ];
 
@@ -248,7 +257,7 @@ export async function deleteFromFirestore(tableName: string, idOrIds: any | any[
         continue;
       }
 
-      const docRef = doc(firestore, tableName, String(id));
+      const docRef = doc(firestore, getCollectionName(tableName), String(id));
       batch.delete(docRef);
       count++;
       if (count >= 400) {
@@ -326,7 +335,7 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
 
         // 4. Consultar ID máximo actual en Firestore
         let firestoreMaxId = 0;
-        const colRef = collection(firestore, tableName);
+        const colRef = collection(firestore, getCollectionName(tableName));
         try {
           const q = query(colRef, orderBy('id', 'desc'), limit(1));
           const qSnapshot = await getDocs(q);
@@ -378,7 +387,7 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
               continue;
             }
 
-            const docRef = doc(firestore, tableName, docId);
+            const docRef = doc(firestore, getCollectionName(tableName), docId);
             batch.set(docRef, enrichedData);
             opCount++;
 
@@ -404,7 +413,7 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
       }
     }
 
-    const colRef = collection(firestore, tableName);
+    const colRef = collection(firestore, getCollectionName(tableName));
 
     // If this is a targeted update (idList was specified), we don't handle deletions of other rows.
     // We only upsert the specified rows. This runs in O(N) where N is the number of updated rows (usually 1 or a few).
@@ -439,7 +448,7 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
           continue;
         }
 
-        const docRef = doc(firestore, tableName, docId);
+        const docRef = doc(firestore, getCollectionName(tableName), docId);
         batch.set(docRef, enrichedData);
         opCount++;
 
@@ -522,7 +531,7 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
         continue;
       }
 
-      const docRef = doc(firestore, tableName, docId);
+      const docRef = doc(firestore, getCollectionName(tableName), docId);
       batch.set(docRef, enrichedData);
       opCount++;
 
@@ -577,7 +586,7 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
 
   try {
     // Determine if Firestore has been initialized/populated already
-    const metaRef = doc(firestore, 'sync_metadata', 'status');
+    const metaRef = doc(firestore, getCollectionName('sync_metadata'), 'status');
     const metaDoc = await getDoc(metaRef);
     
     // Query local database sizes to see if we have actual user records locally to seed
@@ -591,7 +600,7 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
     try {
       const safetySnaps = await Promise.all(
         ['products', 'sales', 'clients', 'users'].map(collName =>
-          getDocs(query(collection(firestore, collName), limit(1))).catch(() => null)
+          getDocs(query(collection(firestore, getCollectionName(collName)), limit(1))).catch(() => null)
         )
       );
       hasAnyFirestoreDocuments = safetySnaps.some(s => s && !s.empty);
@@ -605,13 +614,28 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
       if (hasLocalUserData) {
         console.log("[Sync] Initializing cloud database with local records...");
         await pushAllLocalToFirestore();
-        await setDoc(metaRef, { initialized: true, initializedAt: new Date().toISOString() });
+        await setDoc(metaRef, { 
+          initialized: true, 
+          initializedAt: new Date().toISOString(),
+          _tx_hash: 'sync_metadata_init',
+          _tx_timestamp: new Date().toISOString()
+        });
         return;
       } else {
-        await setDoc(metaRef, { initialized: true, initializedAt: new Date().toISOString() });
+        await setDoc(metaRef, { 
+          initialized: true, 
+          initializedAt: new Date().toISOString(),
+          _tx_hash: 'sync_metadata_init',
+          _tx_timestamp: new Date().toISOString()
+        });
       }
     } else if (!metaDoc.exists()) {
-      await setDoc(metaRef, { initialized: true, initializedAt: new Date().toISOString() });
+      await setDoc(metaRef, { 
+        initialized: true, 
+        initializedAt: new Date().toISOString(),
+        _tx_hash: 'sync_metadata_init',
+        _tx_timestamp: new Date().toISOString()
+      });
     }
 
     let updatedTableCount = 0;
@@ -622,9 +646,9 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
         try {
           let snapshot;
           if (table === 'firestore_transaction_ledger') {
-            snapshot = await getDocs(query(collection(firestore, table), limit(100)));
+            snapshot = await getDocs(query(collection(firestore, getCollectionName(table)), limit(100)));
           } else {
-            snapshot = await getDocs(collection(firestore, table));
+            snapshot = await getDocs(collection(firestore, getCollectionName(table)));
           }
           return { table, snapshot, error: null };
         } catch (tableErr: any) {
@@ -797,7 +821,7 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
                       { key: 'exchange_rate', value: String(localVal), updated_at: new Date().toISOString() },
                       { userId: 4, userName: 'admin', userRole: 'admin', isSystemDaemon: true }
                     );
-                    setDoc(doc(firestore, 'settings', 'exchange_rate'), validation.enrichedPayload).catch(() => {});
+                    setDoc(doc(firestore, getCollectionName('settings'), 'exchange_rate'), validation.enrichedPayload).catch(() => {});
                   } catch (_) {}
                   continue;
                 }
@@ -866,23 +890,26 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
  * Supports mapping table names to exact primary key values to execute a targeted push.
  */
 export function syncAfterWrite(tableOrMap: string | string[] | Record<string, any | any[]>, idOrIds?: any | any[]) {
-  if (typeof tableOrMap === 'object' && !Array.isArray(tableOrMap)) {
-    // It's a Record mapping: { tableName: idOrIds }
-    for (const [table, ids] of Object.entries(tableOrMap)) {
-      pushLocalToFirestore(table, ids).catch(err => {
-        console.warn(`[Sync Offline Mode] Targeted sync postponed for table "${table}":`, err.message);
-      });
+  const isSandbox = isCurrentContextSandbox();
+  dbAsyncLocalStorage.run({ isSandbox }, () => {
+    if (typeof tableOrMap === 'object' && !Array.isArray(tableOrMap)) {
+      // It's a Record mapping: { tableName: idOrIds }
+      for (const [table, ids] of Object.entries(tableOrMap)) {
+        pushLocalToFirestore(table, ids).catch(err => {
+          console.warn(`[Sync Offline Mode] Targeted sync postponed for table "${table}":`, err.message);
+        });
+      }
+    } else {
+      const tables = Array.isArray(tableOrMap) ? tableOrMap : [tableOrMap];
+      for (const table of tables) {
+        // If single table and idOrIds is supplied, target it. Otherwise fallback to full table sync.
+        const targetIds = (tables.length === 1 || tables[0] === table) ? idOrIds : undefined;
+        pushLocalToFirestore(table, targetIds).catch(err => {
+          console.warn(`[Sync Offline Mode] Sync postponed for table "${table}":`, err.message);
+        });
+      }
     }
-  } else {
-    const tables = Array.isArray(tableOrMap) ? tableOrMap : [tableOrMap];
-    for (const table of tables) {
-      // If single table and idOrIds is supplied, target it. Otherwise fallback to full table sync.
-      const targetIds = (tables.length === 1 || tables[0] === table) ? idOrIds : undefined;
-      pushLocalToFirestore(table, targetIds).catch(err => {
-        console.warn(`[Sync Offline Mode] Sync postponed for table "${table}":`, err.message);
-      });
-    }
-  }
+  });
 }
 
 /**
@@ -903,7 +930,7 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
           let hasMore = true;
           let totalDeleted = 0;
           while (hasMore) {
-            const colRef = collection(firestore, tableName);
+            const colRef = collection(firestore, getCollectionName(tableName));
             const q = query(colRef, limit(200));
             const snapshot = await getDocs(q);
             if (snapshot.empty) {
@@ -929,8 +956,13 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
       }));
 
       // Mark sync_metadata status as initialized so empty collections are treated as intentionally zeroed
-      const metaRef = doc(firestore, 'sync_metadata', 'status');
-      await setDoc(metaRef, { initialized: true, resetAt: new Date().toISOString() });
+      const metaRef = doc(firestore, getCollectionName('sync_metadata'), 'status');
+      await setDoc(metaRef, { 
+        initialized: true, 
+        resetAt: new Date().toISOString(),
+        _tx_hash: 'sync_metadata_reset',
+        _tx_timestamp: new Date().toISOString()
+      });
     } catch (fsErr: any) {
       console.warn("[Sync Reset Warning] Failed to authenticate or access Firestore during reset:", fsErr.message);
     }

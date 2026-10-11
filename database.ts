@@ -32,27 +32,95 @@ export function getBoliviaISOString(): string {
   }
 }
 
-const dbPath = path.resolve(process.cwd(), 'gtr_pos.db');
-export const db = new Database(dbPath, { timeout: 10000 });
+import { AsyncLocalStorage } from 'node:async_hooks';
 
-// Enable WAL journal mode and boost better-sqlite3 performance under concurrent AI/Express operations
-db.pragma('journal_mode = WAL');
-db.pragma('synchronous = NORMAL');
-db.pragma('temp_store = MEMORY');
-db.pragma('cache_size = -16000'); // 16MB cache allocation
-db.pragma('wal_autocheckpoint = 1000');
-
-// Initial WAL flush on startup
-try {
-  db.pragma('wal_checkpoint(PASSIVE)');
-} catch (chkErr: any) {
-  console.warn('[SQLite Maintenance] Initial WAL checkpoint note:', chkErr.message);
+export interface DbContext {
+  isSandbox: boolean;
 }
+
+export const dbAsyncLocalStorage = new AsyncLocalStorage<DbContext>();
+
+export function isCurrentContextSandbox(): boolean {
+  const store = dbAsyncLocalStorage.getStore();
+  if (store !== undefined) {
+    return store.isSandbox;
+  }
+  return Boolean(
+    process.env.K_SERVICE?.startsWith('ais-dev') || 
+    process.env.APP_URL?.includes('ais-dev') || 
+    process.env.NODE_ENV !== 'production'
+  );
+}
+
+export const prodDbPath = path.resolve(process.cwd(), 'gtr_pos.db');
+export const sandboxDbPath = path.resolve(process.cwd(), 'gtr_pos_sandbox.db');
+
+export function getActiveDbPath(): string {
+  return isCurrentContextSandbox() ? sandboxDbPath : prodDbPath;
+}
+
+function setupDbPragmas(databaseInstance: Database.Database) {
+  databaseInstance.pragma('journal_mode = WAL');
+  databaseInstance.pragma('synchronous = NORMAL');
+  databaseInstance.pragma('temp_store = MEMORY');
+  databaseInstance.pragma('cache_size = -16000'); // 16MB cache allocation
+  databaseInstance.pragma('wal_autocheckpoint = 1000');
+  try {
+    databaseInstance.pragma('wal_checkpoint(PASSIVE)');
+  } catch (chkErr: any) {
+    console.warn('[SQLite Maintenance] Initial WAL checkpoint note:', chkErr.message);
+  }
+}
+
+let prodDbInstance: Database.Database | null = null;
+let sandboxDbInstance: Database.Database | null = null;
+
+export function getProdDb(): Database.Database {
+  if (!prodDbInstance) {
+    prodDbInstance = new Database(prodDbPath, { timeout: 10000 });
+    setupDbPragmas(prodDbInstance);
+  }
+  return prodDbInstance;
+}
+
+export function getSandboxDb(): Database.Database {
+  if (!sandboxDbInstance) {
+    // If sandbox db does not exist, clone production db initially so sandbox has current products and configuration
+    if (!fs.existsSync(sandboxDbPath) && fs.existsSync(prodDbPath)) {
+      try {
+        fs.copyFileSync(prodDbPath, sandboxDbPath);
+        console.log('[Sandbox Isolation] Cloned initial gtr_pos.db snapshot to gtr_pos_sandbox.db');
+      } catch (err: any) {
+        console.warn('[Sandbox Isolation] Failed to clone initial database:', err.message);
+      }
+    }
+    sandboxDbInstance = new Database(sandboxDbPath, { timeout: 10000 });
+    setupDbPragmas(sandboxDbInstance);
+  }
+  return sandboxDbInstance;
+}
+
+export function getActiveDb(): Database.Database {
+  return isCurrentContextSandbox() ? getSandboxDb() : getProdDb();
+}
+
+// Transparent Proxy that automatically routes to the isolated sandbox DB or production DB
+export const db = new Proxy({} as Database.Database, {
+  get(target, prop, receiver) {
+    const activeDb = getActiveDb();
+    const val = (activeDb as any)[prop];
+    if (typeof val === 'function') {
+      return val.bind(activeDb);
+    }
+    return val;
+  }
+});
 
 // Scheduled passive WAL maintenance every 10 minutes to prevent unbound .db-wal file growth
 const walMaintenanceInterval = setInterval(() => {
   try {
-    db.pragma('wal_checkpoint(PASSIVE)');
+    if (prodDbInstance) prodDbInstance.pragma('wal_checkpoint(PASSIVE)');
+    if (sandboxDbInstance) sandboxDbInstance.pragma('wal_checkpoint(PASSIVE)');
   } catch (err: any) {
     console.warn('[SQLite Maintenance] Periodic wal_checkpoint error:', err.message);
   }
@@ -60,6 +128,45 @@ const walMaintenanceInterval = setInterval(() => {
 
 if (typeof walMaintenanceInterval.unref === 'function') {
   walMaintenanceInterval.unref();
+}
+
+export function cloneProductionToSandbox() {
+  if (!fs.existsSync(prodDbPath)) {
+    throw new Error('La base de datos de producción gtr_pos.db no existe.');
+  }
+
+  // Flush WAL on prod
+  try {
+    getProdDb().pragma('wal_checkpoint(PASSIVE)');
+  } catch (_) {}
+
+  // Close sandbox if open
+  if (sandboxDbInstance) {
+    try {
+      sandboxDbInstance.close();
+    } catch (_) {}
+    sandboxDbInstance = null;
+  }
+
+  // Remove sandbox DB files
+  try {
+    if (fs.existsSync(sandboxDbPath)) fs.unlinkSync(sandboxDbPath);
+    if (fs.existsSync(`${sandboxDbPath}-wal`)) fs.unlinkSync(`${sandboxDbPath}-wal`);
+    if (fs.existsSync(`${sandboxDbPath}-shm`)) fs.unlinkSync(`${sandboxDbPath}-shm`);
+  } catch (_) {}
+
+  // Copy fresh prodDb to sandboxDb
+  fs.copyFileSync(prodDbPath, sandboxDbPath);
+
+  // Re-open sandboxDb
+  const sDb = getSandboxDb();
+  const count = (sDb.prepare('SELECT count(*) as count FROM products').get() as any)?.count || 0;
+  console.log(`[Sandbox Isolation] Cloned fresh production database to sandbox with ${count} products.`);
+  return {
+    success: true,
+    message: `Base de datos de pruebas (Sandbox) sincronizada con éxito (${count} productos reales).`,
+    productsCount: count
+  };
 }
 
 // Initialization
@@ -558,6 +665,31 @@ try {
 try {
   db.exec("ALTER TABLE inventory_count_items ADD COLUMN recount_requested INTEGER DEFAULT 0");
 } catch (e: any) {}
+
+// FASE 4: Dedicated table for sale returns (auditoría sin alterar el comprobante original)
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sale_returns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sale_id INTEGER NOT NULL,
+      sale_item_id INTEGER,
+      product_id INTEGER NOT NULL,
+      product_name TEXT,
+      product_sku TEXT,
+      quantity INTEGER NOT NULL,
+      refund_amount REAL NOT NULL,
+      unit_price REAL NOT NULL,
+      reason TEXT,
+      user_id INTEGER,
+      username TEXT,
+      cashier_id INTEGER,
+      cashier_username TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+} catch (e: any) {
+  console.error("Error creating sale_returns table:", e.message);
+}
 
 // Create System Audit Logs table for advanced immutable auditing
 try {

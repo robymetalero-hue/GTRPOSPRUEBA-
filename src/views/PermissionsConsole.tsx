@@ -158,10 +158,17 @@ export default function PermissionsConsole() {
         }, 4000);
     };
 
+    const isSandboxEnv = typeof window !== 'undefined' && (
+        window.location.hostname.includes('ais-dev') || 
+        window.location.hostname.includes('localhost') || 
+        window.location.hostname.includes('127.0.0.1')
+    );
+    const logsCollectionName = isSandboxEnv ? 'sandbox_security_logs' : 'security_logs';
+
     const fetchSecurityLogs = async () => {
         setIsLoadingLogs(true);
         try {
-            const q = query(collection(firestoreDb, 'security_logs'), orderBy('timestamp', 'desc'), limit(50));
+            const q = query(collection(firestoreDb, logsCollectionName), orderBy('timestamp', 'desc'), limit(50));
             const querySnapshot = await getDocs(q);
             const logs: any[] = [];
             querySnapshot.forEach((doc) => {
@@ -178,7 +185,7 @@ export default function PermissionsConsole() {
 
     const logSecurityAction = async (targetUsername: string, actionType: string, changes: string) => {
         try {
-            await addDoc(collection(firestoreDb, 'security_logs'), {
+            await addDoc(collection(firestoreDb, logsCollectionName), {
                 admin_username: user?.username || 'admin',
                 target_username: targetUsername,
                 action_type: actionType,

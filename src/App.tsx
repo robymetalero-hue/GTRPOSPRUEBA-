@@ -303,6 +303,30 @@ function AppLayout() {
     const [pingingDevices, setPingingDevices] = useState(false);
     const [globalNotification, setGlobalNotification] = useState<{message: string; type: "success"|"error"|"warn"} | null>(null);
 
+    const isSandboxEnv = typeof window !== 'undefined' && (
+        window.location.hostname.includes('ais-dev') || 
+        window.location.hostname === 'localhost' || 
+        window.location.hostname === '127.0.0.1'
+    );
+    const [cloningSandbox, setCloningSandbox] = useState(false);
+    const handleCloneSandbox = async () => {
+        if (!window.confirm("⚠️ ¿Deseas actualizar el Sandbox con los datos reales de Producción?\n\nEsto recargará los productos, configuraciones y usuarios desde producción hacia 'gtr_pos_sandbox.db' para que puedas hacer pruebas realistas sin tocar producción.")) {
+            return;
+        }
+        setCloningSandbox(true);
+        try {
+            const res = await fetch('/api/sandbox/clone-production', { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Error al clonar base de datos');
+            setGlobalNotification({ message: data.message || 'Sandbox actualizado con éxito', type: 'success' });
+            setTimeout(() => { window.location.reload(); }, 1200);
+        } catch (err: any) {
+            setGlobalNotification({ message: err.message, type: 'error' });
+        } finally {
+            setCloningSandbox(false);
+        }
+    };
+
     
     useLayoutEffect(() => {
         const allowedKioskViews = ['pos', 'cajas', 'historial_ventas', 'conteo_fisico'];
@@ -1192,6 +1216,29 @@ function AppLayout() {
 
             {/* Main body wrapper */}
             <div className="flex-grow flex flex-col h-full overflow-hidden relative">
+
+                {/* Isolated Sandbox Indicator Banner */}
+                {isSandboxEnv && (
+                    <div className="bg-amber-500/15 dark:bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs text-amber-800 dark:text-amber-200 z-50 shrink-0 select-none">
+                        <div className="flex items-center gap-2 font-medium">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-amber-500/25 text-amber-900 dark:text-amber-200 border border-amber-500/40 shrink-0">
+                                ENTORNO SANDBOX AISLADO
+                            </span>
+                            <span>
+                                Todo cambio, venta o prueba que realices aquí queda confinado en <strong>gtr_pos_sandbox.db</strong> y <strong>NO afecta la app en producción</strong>.
+                            </span>
+                        </div>
+                        <button
+                            onClick={handleCloneSandbox}
+                            disabled={cloningSandbox}
+                            className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 text-amber-900 dark:text-amber-200 rounded-lg text-[11px] font-bold border border-amber-500/40 transition-all flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50"
+                            title="Clonar catálogo y datos de producción al sandbox para pruebas"
+                        >
+                            <RefreshCw size={12} className={cloningSandbox ? "animate-spin" : ""} />
+                            {cloningSandbox ? "Copiando..." : "Clonar Producción a Sandbox"}
+                        </button>
+                    </div>
+                )}
                 
                 {/* Firebase Quota Warning Banner */}
                 {syncError && (syncError.toLowerCase().includes('quota') || syncError.toLowerCase().includes('resource_exhausted')) && (

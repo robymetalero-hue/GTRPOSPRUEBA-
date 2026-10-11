@@ -65,90 +65,115 @@ Date.prototype.toISOString = function () {
 let cachedUserStr: string | null = null;
 let cachedUserObj: any = null;
 
-const originalFetch = window.fetch;
+const originalFetch = typeof window !== 'undefined' && window.fetch ? window.fetch.bind(window) : fetch;
+const patchedFetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  let url = '';
+  if (typeof input === 'string') {
+    url = input;
+  } else if (input instanceof URL) {
+    url = input.href;
+  } else if (input && typeof input === 'object' && 'url' in input) {
+    url = (input as any).url;
+  }
+  if (!url.startsWith('http') || url.startsWith(window.location.origin)) {
+    init = init || {};
+    const headersObj: Record<string, string> = {};
+    if (init.headers) {
+      if (typeof (init.headers as any).forEach === 'function') {
+        (init.headers as any).forEach((value: string, key: string) => {
+          headersObj[key.toLowerCase()] = value;
+        });
+      } else if (Array.isArray(init.headers)) {
+        init.headers.forEach(([key, value]) => {
+          headersObj[key.toLowerCase()] = value;
+        });
+      } else if (typeof init.headers === 'object') {
+        Object.keys(init.headers).forEach(key => {
+          headersObj[key.toLowerCase()] = (init.headers as any)[key];
+        });
+      }
+    }
+
+    // Attach explicit sandbox environment header if running in sandbox
+    const isSandbox = window.location.hostname.includes('ais-dev') || 
+                      window.location.hostname.includes('localhost') || 
+                      window.location.hostname.includes('127.0.0.1');
+    if (isSandbox) {
+      headersObj['x-app-environment'] = 'sandbox';
+    } else if (window.location.hostname.includes('ais-pre')) {
+      headersObj['x-app-environment'] = 'production';
+    }
+
+    // Attach Authorization token if available
+    const token = localStorage.getItem('auth_token');
+    if (token && token.trim() && (!headersObj['authorization'] || headersObj['authorization'] === 'Bearer ' || headersObj['authorization'] === 'Bearer undefined')) {
+      headersObj['authorization'] = `Bearer ${token.trim()}`;
+    } else if (!token && (headersObj['authorization'] === 'Bearer ' || headersObj['authorization'] === 'Bearer undefined')) {
+      delete headersObj['authorization'];
+    }
+
+    // Attach user identification headers if available
+    const userJson = localStorage.getItem('user');
+    if (userJson) {
+      try {
+        if (userJson !== cachedUserStr) {
+            cachedUserStr = userJson;
+            cachedUserObj = JSON.parse(userJson);
+        }
+        const user = cachedUserObj;
+        if (user) {
+          if (!headersObj['x-user-id'] && user.id) {
+            headersObj['x-user-id'] = String(user.id);
+          }
+          if (!headersObj['x-user-role'] && user.role) {
+            headersObj['x-user-role'] = String(user.role);
+          }
+          if (!headersObj['x-user-username'] && user.username) {
+            headersObj['x-user-username'] = String(user.username);
+          }
+          if (!headersObj['x-user-name'] && user.username) {
+            headersObj['x-user-name'] = String(user.username);
+          }
+          if (!headersObj['x-user-permissions'] && user.permissions) {
+            headersObj['x-user-permissions'] = JSON.stringify(user.permissions);
+          }
+        }
+      } catch (err) {
+        console.error("Error parsing user in fetch patch", err);
+      }
+    }
+    init.headers = headersObj;
+  }
+  return originalFetch(input, init).then(res => {
+    if (res.status === 401 && !url.includes('/auth/login')) {
+        console.warn("[Fetch Interceptor] Received 401 Unauthorized for URL:", url);
+    }
+    return res;
+  });
+};
+
 try {
   Object.defineProperty(window, 'fetch', {
-    value: async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-      let url = '';
-      if (typeof input === 'string') {
-        url = input;
-      } else if (input instanceof URL) {
-        url = input.href;
-      } else if (input && typeof input === 'object' && 'url' in input) {
-        url = (input as any).url;
-      }
-      if (!url.startsWith('http') || url.startsWith(window.location.origin)) {
-        init = init || {};
-        const headersObj: Record<string, string> = {};
-        if (init.headers) {
-          if (typeof (init.headers as any).forEach === 'function') {
-            (init.headers as any).forEach((value: string, key: string) => {
-              headersObj[key.toLowerCase()] = value;
-            });
-          } else if (Array.isArray(init.headers)) {
-            init.headers.forEach(([key, value]) => {
-              headersObj[key.toLowerCase()] = value;
-            });
-          } else if (typeof init.headers === 'object') {
-            Object.keys(init.headers).forEach(key => {
-              headersObj[key.toLowerCase()] = (init.headers as any)[key];
-            });
-          }
-        }
-
-        // Attach Authorization token if available
-        const token = localStorage.getItem('auth_token');
-        if (token && token.trim() && (!headersObj['authorization'] || headersObj['authorization'] === 'Bearer ' || headersObj['authorization'] === 'Bearer undefined')) {
-          headersObj['authorization'] = `Bearer ${token.trim()}`;
-        } else if (!token && (headersObj['authorization'] === 'Bearer ' || headersObj['authorization'] === 'Bearer undefined')) {
-          delete headersObj['authorization'];
-        }
-
-        // Attach user identification headers if available
-        const userJson = localStorage.getItem('user');
-        if (userJson) {
-          try {
-            if (userJson !== cachedUserStr) {
-                cachedUserStr = userJson;
-                cachedUserObj = JSON.parse(userJson);
-            }
-            const user = cachedUserObj;
-            if (user) {
-              if (!headersObj['x-user-id'] && user.id) {
-                headersObj['x-user-id'] = String(user.id);
-              }
-              if (!headersObj['x-user-role'] && user.role) {
-                headersObj['x-user-role'] = String(user.role);
-              }
-              if (!headersObj['x-user-username'] && user.username) {
-                headersObj['x-user-username'] = String(user.username);
-              }
-              if (!headersObj['x-user-name'] && user.username) {
-                headersObj['x-user-name'] = String(user.username);
-              }
-              if (!headersObj['x-user-permissions'] && user.permissions) {
-                headersObj['x-user-permissions'] = JSON.stringify(user.permissions);
-              }
-            }
-          } catch (err) {
-            console.error("Error parsing user in fetch patch", err);
-          }
-        }
-        init.headers = headersObj;
-      }
-      return originalFetch(input, init).then(res => {
-        if (res.status === 401 && !url.includes('/auth/login')) {
-            console.warn("[Fetch Interceptor] Received 401 Unauthorized for URL:", url);
-        }
-        return res;
-      });
-    },
+    value: patchedFetch,
     writable: true,
     configurable: true,
     enumerable: true
   });
-} catch (e) {
-  console.warn("Could not patch window.fetch via Object.defineProperty:", e);
+} catch {
+  try {
+    (window as any).fetch = patchedFetch;
+  } catch {
+    try {
+      Object.defineProperty(Window.prototype, 'fetch', {
+        value: patchedFetch,
+        writable: true,
+        configurable: true,
+        enumerable: true
+      });
+    } catch (err) {
+      console.warn("[Fetch Interceptor] Could not patch fetch globally:", err);
+    }
+  }
 }
 
 import {StrictMode} from 'react';

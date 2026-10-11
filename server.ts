@@ -9,10 +9,18 @@ import { createServer as createViteServer } from "vite";
 import jwt from "jsonwebtoken";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { db, getBoliviaISOString, insertSystemAuditLog } from "./database.ts";
+import { 
+  db, 
+  getBoliviaISOString, 
+  insertSystemAuditLog, 
+  dbAsyncLocalStorage, 
+  isCurrentContextSandbox, 
+  getActiveDbPath, 
+  cloneProductionToSandbox 
+} from "./database.ts";
 import { hashPassword, verifyPassword, isPasswordHashed, getJwtSecret } from "./authSecurity.ts";
 import { normalizeProductName } from "./src/utils/productUtils.ts";
-import { pullFirestoreToLocal, pushFirestoreToLocal, startPeriodicLedgerReconciliation, syncAfterWrite, pushAllLocalToFirestore, firestore, clearAllFirestoreAndLocalData, recordDeletion, deleteFromFirestore, reconcileCatalogStockWithLedger } from "./firebaseSync.ts";
+import { pullFirestoreToLocal, pushFirestoreToLocal, startPeriodicLedgerReconciliation, syncAfterWrite, pushAllLocalToFirestore, firestore, clearAllFirestoreAndLocalData, recordDeletion, deleteFromFirestore, reconcileCatalogStockWithLedger, getCollectionName } from "./firebaseSync.ts";
 import { getProductForensicTimeline, auditEntireCatalog, searchProductsForAudit, generateForensicMarkdownReport, getAvailableAuditPeriods, auditDatabaseByPeriod, reconcileProductDiscrepancy } from "./forensicAuditEngine.ts";
 import { requestContextStorage, getRecentFirestoreLedger, getFirestoreLedgerStats, validateFirestoreWriteOperation } from "./firestoreIntegrityMiddleware.ts";
 import { collection, getDocs, doc, getDoc, setDoc } from "firebase/firestore";
@@ -184,6 +192,38 @@ async function startServer() {
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
+  // Sandbox vs Production Environment Isolation Gate
+  // Dynamically determines whether the request operates in the isolated sandbox environment or production
+  app.use((req, res, next) => {
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '');
+    const referer = String(req.headers.referer || '');
+    const explicitHeader = String(req.headers['x-app-environment'] || '').toLowerCase();
+
+    let isSandbox = false;
+    if (explicitHeader === 'sandbox') {
+      isSandbox = true;
+    } else if (explicitHeader === 'production') {
+      isSandbox = false;
+    } else if (host.includes('ais-dev') || referer.includes('ais-dev') || host.includes('localhost') || host.includes('127.0.0.1')) {
+      isSandbox = true;
+    } else if (host.includes('ais-pre')) {
+      isSandbox = false;
+    } else {
+      isSandbox = Boolean(
+        process.env.K_SERVICE?.startsWith('ais-dev') || 
+        process.env.APP_URL?.includes('ais-dev') || 
+        process.env.NODE_ENV !== 'production'
+      );
+    }
+
+    (req as any).isSandbox = isSandbox;
+    res.setHeader('X-App-Environment', isSandbox ? 'sandbox' : 'production');
+
+    dbAsyncLocalStorage.run({ isSandbox }, () => {
+      next();
+    });
+  });
+
   // Universal Zero-Cache Policy for all API Endpoints
   // Ensures mobile browsers, service workers and proxies never serve stale stock or catalog data from cache
   app.use('/api', (req, res, next) => {
@@ -231,62 +271,29 @@ async function startServer() {
       }
     }
 
-    // Fallback user resolution: if no bearer token or token expired, verify from headers or body user
-    if (!verifiedUser) {
-      const headerUserId = req.headers['x-user-id'] || (req.query && typeof req.query.user_id === 'string' ? req.query.user_id : undefined);
-      const headerUsername = req.headers['x-user-username'] || req.headers['x-user-name'] || (req.query && typeof req.query.username === 'string' ? req.query.username : undefined);
-      const bodyUser = req.body && typeof req.body === 'object' ? req.body.user : null;
-      
-      const candidateId = headerUserId || (bodyUser && bodyUser.id) || (req.body && (req.body.user_id || req.body.userId));
-      const candidateUsername = headerUsername || (bodyUser && (bodyUser.username || bodyUser.userName)) || (req.body && (req.body.username || req.body.userName));
-
-      if (candidateId) {
-        try {
-          const freshUser = db.prepare('SELECT id, username, role, permissions, email FROM users WHERE id = ?').get(candidateId) as any;
-          if (freshUser) {
-            verifiedUser = {
-              id: freshUser.id,
-              username: freshUser.username,
-              role: freshUser.role,
-              permissions: JSON.parse(freshUser.permissions || "{}"),
-              email: freshUser.email
-            };
-          }
-        } catch {}
-      } else if (candidateUsername) {
-        try {
-          const freshUser = db.prepare('SELECT id, username, role, permissions, email FROM users WHERE LOWER(username) = LOWER(?)').get(candidateUsername) as any;
-          if (freshUser) {
-            verifiedUser = {
-              id: freshUser.id,
-              username: freshUser.username,
-              role: freshUser.role,
-              permissions: JSON.parse(freshUser.permissions || "{}"),
-              email: freshUser.email
-            };
-          }
-        } catch {}
-      }
-    }
-
     // Explicit list of public endpoints that do not require authentication
     const publicPaths = [
       '/api/health',
+      '/api/environment/status',
       '/api/app-version',
       '/api/catalog/version',
       '/api/auth/login',
       '/api/auth/recover-password',
       '/api/auth/verify-supervisor',
       '/api/inventory-counts/lock-status',
-      '/api/offline-sales/count'
+      '/api/offline-sales/count',
+      '/api/analytics/phase3-metrics',
+      '/api/backup/verify-integrity'
     ];
 
     const isPublicRoute = 
       publicPaths.includes(req.path) ||
       req.path.startsWith('/api/sync/') ||
       req.path.startsWith('/api/diagnose/') ||
+      req.path.startsWith('/api/analytics/') ||
       req.path === '/api/backup' ||
       req.path.startsWith('/api/backup/') ||
+      req.path.startsWith('/api/sandbox/') ||
       (req.method === 'GET' && (
         req.path === '/api/products' ||
         req.path.startsWith('/api/products') ||
@@ -643,11 +650,46 @@ async function startServer() {
 
   // Ultra-fast Health & Ping endpoint for offline health detection & latency measurement
   app.get("/api/health", (req, res) => {
+    const isSandbox = isCurrentContextSandbox();
     res.json({
       status: "ok",
+      environment: isSandbox ? "sandbox" : "production",
+      database: path.basename(getActiveDbPath()),
       timestamp: new Date().toISOString(),
       server: "GTR POS Core Engine"
     });
+  });
+
+  // Environment Status & Verification Endpoint
+  app.get("/api/environment/status", (req, res) => {
+    const isSandbox = isCurrentContextSandbox();
+    let productsCount = 0;
+    let salesCount = 0;
+    try {
+      productsCount = (db.prepare("SELECT count(*) as count FROM products").get() as any)?.count || 0;
+      salesCount = (db.prepare("SELECT count(*) as count FROM sales").get() as any)?.count || 0;
+    } catch (_) {}
+
+    res.json({
+      environment: isSandbox ? "sandbox" : "production",
+      isSandbox,
+      databaseFile: path.basename(getActiveDbPath()),
+      productsCount,
+      salesCount,
+      host: req.headers.host,
+      appUrl: process.env.APP_URL
+    });
+  });
+
+  // Clone Production database into Sandbox on demand
+  app.post("/api/sandbox/clone-production", (req, res) => {
+    try {
+      const result = cloneProductionToSandbox();
+      res.json(result);
+    } catch (err: any) {
+      console.error("[Sandbox Clone Error]:", err.message);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // REST API: Authentication & Roles
@@ -4182,7 +4224,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
   function createLocalDbSnapshot(reason = 'manual') {
     try {
-      const dbPath = path.resolve(process.cwd(), "gtr_pos.db");
+      const dbPath = getActiveDbPath();
       if (!fs.existsSync(dbPath)) return null;
 
       // Only update root backup copy if current DB has a verified healthy catalog
@@ -4544,6 +4586,266 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
   });
 
+  // ==========================================
+  // PHASE 3: ADVANCED PREDICTIVE ANALYTICS & RESILIENCE
+  // ==========================================
+
+  // REST API: Phase 3 Advanced Inventory Analytics & Predictive Metrics
+  app.get("/api/analytics/phase3-metrics", (req, res) => {
+    try {
+      // 1. Stock turnover and days of inventory remaining (based on last 30 days sales)
+      const productsMetrics = db.prepare(`
+        SELECT 
+          p.id,
+          p.name,
+          p.sku,
+          COALESCE(p.category, 'General') as category,
+          p.stock,
+          p.price_cost,
+          p.price_unit,
+          COALESCE(sales_30d.units_sold, 0) as units_sold_30d,
+          COALESCE(sales_30d.total_revenue, 0) as total_revenue_30d,
+          COALESCE(sales_30d.tx_count, 0) as tx_count_30d
+        FROM products p
+        LEFT JOIN (
+          SELECT 
+            si.product_id,
+            SUM(si.quantity) as units_sold,
+            SUM(si.quantity * (CASE WHEN s.currency = 'USD' THEN si.price * s.exchange_rate ELSE si.price END)) as total_revenue,
+            COUNT(DISTINCT s.id) as tx_count
+          FROM sale_items si
+          JOIN sales s ON s.id = si.sale_id
+          WHERE s.created_at >= datetime('now', '-30 days')
+          GROUP BY si.product_id
+        ) sales_30d ON sales_30d.product_id = p.id
+        ORDER BY p.name ASC
+      `).all() as any[];
+
+      let totalCatalogItems = productsMetrics.length;
+      let totalStockUnits = 0;
+      let totalStockCostBob = 0;
+      let totalTrappedCapitalBob = 0;
+      let dormantProductsCount = 0;
+      let criticalStockoutCount = 0;
+      let warningStockoutCount = 0;
+      let healthyStockCount = 0;
+
+      const processedProducts = productsMetrics.map(prod => {
+        const stock = Number(prod.stock || 0);
+        const cost = Number(prod.price_cost || 0);
+        const unitsSold30d = Number(prod.units_sold_30d || 0);
+        const totalValue = stock * cost;
+
+        totalStockUnits += stock;
+        totalStockCostBob += totalValue;
+
+        // Daily run rate over 30 days
+        const dailyRunRate = unitsSold30d / 30.0;
+        
+        let daysOfStockLeft: number;
+        let stockRisk: 'critical' | 'warning' | 'healthy' | 'dormant' | 'out_of_stock';
+
+        if (stock <= 0) {
+          daysOfStockLeft = 0;
+          stockRisk = 'out_of_stock';
+        } else if (unitsSold30d === 0) {
+          daysOfStockLeft = 999;
+          stockRisk = 'dormant';
+          totalTrappedCapitalBob += totalValue;
+          dormantProductsCount++;
+        } else {
+          daysOfStockLeft = Math.round(stock / dailyRunRate);
+          if (daysOfStockLeft <= 7) {
+            stockRisk = 'critical';
+            criticalStockoutCount++;
+          } else if (daysOfStockLeft <= 14) {
+            stockRisk = 'warning';
+            warningStockoutCount++;
+          } else {
+            stockRisk = 'healthy';
+            healthyStockCount++;
+          }
+        }
+
+        const turnoverRatio = stock > 0 ? Number((unitsSold30d / stock).toFixed(2)) : (unitsSold30d > 0 ? 99 : 0);
+
+        return {
+          id: prod.id,
+          name: prod.name,
+          sku: prod.sku,
+          category: prod.category,
+          stock,
+          cost,
+          price: prod.price_unit,
+          totalValueBob: totalValue,
+          unitsSold30d,
+          dailyRunRate: Number(dailyRunRate.toFixed(2)),
+          daysOfStockLeft,
+          stockRisk,
+          turnoverRatio
+        };
+      });
+
+      // Sort dormant products by trapped capital descending
+      const topDormantProducts = processedProducts
+        .filter(p => p.stockRisk === 'dormant' && p.stock > 0)
+        .sort((a, b) => b.totalValueBob - a.totalValueBob)
+        .slice(0, 10);
+
+      // Sort critical stockout risk products
+      const criticalRiskProducts = processedProducts
+        .filter(p => p.stockRisk === 'critical')
+        .sort((a, b) => a.daysOfStockLeft - b.daysOfStockLeft)
+        .slice(0, 15);
+
+      // Category margins calculation
+      const categoryMargins = db.prepare(`
+        SELECT 
+          COALESCE(p.category, 'Sin Categoría') as category,
+          COUNT(DISTINCT p.id) as total_products,
+          COALESCE(SUM(si.quantity), 0) as units_sold,
+          COALESCE(SUM(si.quantity * (CASE WHEN s.currency = 'USD' THEN si.price * s.exchange_rate ELSE si.price END)), 0) as revenue,
+          COALESCE(SUM(si.quantity * (CASE WHEN s.currency = 'USD' THEN COALESCE(si.cost, p.price_cost, 0) * s.exchange_rate ELSE COALESCE(si.cost, p.price_cost, 0) END)), 0) as cost
+        FROM products p
+        LEFT JOIN sale_items si ON si.product_id = p.id
+        LEFT JOIN sales s ON s.id = si.sale_id AND s.created_at >= datetime('now', '-30 days')
+        GROUP BY p.category
+        HAVING revenue > 0 OR units_sold > 0
+        ORDER BY revenue DESC
+      `).all() as any[];
+
+      const processedCategoryMargins = categoryMargins.map(cat => {
+        const rev = Number(cat.revenue || 0);
+        const cst = Number(cat.cost || 0);
+        const grossProfit = rev - cst;
+        const marginPct = rev > 0 ? Number(((grossProfit / rev) * 100).toFixed(1)) : 0;
+        return {
+          category: cat.category,
+          totalProducts: cat.total_products,
+          unitsSold: cat.units_sold,
+          revenue: Number(rev.toFixed(2)),
+          cost: Number(cst.toFixed(2)),
+          grossProfit: Number(grossProfit.toFixed(2)),
+          marginPct
+        };
+      });
+
+      // System resilience check: SQLite PRAGMA
+      const integrityResult = db.pragma('integrity_check(5)') as any[];
+      const isDbHealthy = Array.isArray(integrityResult) && integrityResult[0]?.integrity_check === 'ok';
+
+      // Snapshots count
+      let snapshotCount = 0;
+      let lastSnapshotDate: string | null = null;
+      if (fs.existsSync(BACKUP_DIR)) {
+        const files = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('snapshot_') && f.endsWith('.db'));
+        snapshotCount = files.length;
+        if (files.length > 0) {
+          const stats = files.map(f => fs.statSync(path.join(BACKUP_DIR, f)));
+          stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+          lastSnapshotDate = stats[0].mtime.toISOString();
+        }
+      }
+
+      // Exchange rate for USD display
+      const rateRow = db.prepare("SELECT value FROM settings WHERE key = 'exchange_rate'").get() as any;
+      const exchangeRate = rateRow?.value ? parseFloat(rateRow.value) : 6.96;
+
+      res.json({
+        success: true,
+        summary: {
+          totalCatalogItems,
+          totalStockUnits,
+          totalStockCostBob: Number(totalStockCostBob.toFixed(2)),
+          totalStockCostUsd: Number((totalStockCostBob / exchangeRate).toFixed(2)),
+          trappedCapitalBob: Number(totalTrappedCapitalBob.toFixed(2)),
+          trappedCapitalUsd: Number((totalTrappedCapitalBob / exchangeRate).toFixed(2)),
+          dormantProductsCount,
+          criticalStockoutCount,
+          warningStockoutCount,
+          healthyStockCount,
+          catalogTurnoverAverage: processedProducts.length > 0 
+            ? Number((processedProducts.reduce((acc, p) => acc + p.turnoverRatio, 0) / processedProducts.length).toFixed(2))
+            : 0
+        },
+        resilienceStatus: {
+          sqliteIntegrity: isDbHealthy ? 'OPTIMO_VERIFICADO' : 'REQUIERE_ATENCION',
+          journalMode: 'WAL',
+          snapshotCount,
+          lastSnapshotDate,
+          environment: isCurrentContextSandbox() ? 'sandbox' : 'production'
+        },
+        criticalRiskProducts,
+        topDormantProducts,
+        categoryMargins: processedCategoryMargins
+      });
+    } catch (e: any) {
+      console.error("[Phase 3 Analytics Error]:", e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // REST API: Phase 3 Automated Instant Snapshot with Rotation
+  app.post("/api/backup/auto-snapshot", (req, res) => {
+    try {
+      const integrityCheck = db.pragma('integrity_check(1)') as any[];
+      const isHealthy = Array.isArray(integrityCheck) && integrityCheck[0]?.integrity_check === 'ok';
+      if (!isHealthy) {
+        return res.status(500).json({ error: "No se puede generar respaldo: la prueba de integridad de base de datos reportó anomalías." });
+      }
+
+      const snap = createLocalDbSnapshot('auto_phase3');
+      if (snap) {
+        // Enforce max 7 auto snapshots rotation in backup dir
+        const files = fs.readdirSync(BACKUP_DIR)
+          .filter(f => f.startsWith('snapshot_') && f.endsWith('.db'))
+          .map(f => {
+            const p = path.join(BACKUP_DIR, f);
+            return { name: f, path: p, time: fs.statSync(p).mtimeMs };
+          })
+          .sort((a, b) => b.time - a.time);
+
+        if (files.length > 7) {
+          for (const oldFile of files.slice(7)) {
+            try { fs.unlinkSync(oldFile.path); } catch (e) {}
+          }
+        }
+
+        res.json({
+          success: true,
+          message: "Copia de seguridad instantánea con rotación completada exitosamente.",
+          snapshot: snap,
+          totalSnapshots: Math.min(files.length, 7),
+          integrity: "OK_INTEGRITY_VERIFIED"
+        });
+      } else {
+        res.status(500).json({ error: "No se pudo generar la copia de seguridad." });
+      }
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // REST API: Phase 3 Comprehensive SQLite Integrity Check
+  app.get("/api/backup/verify-integrity", (req, res) => {
+    try {
+      const integrity = db.pragma('integrity_check(50)') as any[];
+      const foreignKeys = db.pragma('foreign_key_check') as any[];
+      const isIntegrityOk = Array.isArray(integrity) && integrity[0]?.integrity_check === 'ok';
+      const isFkOk = Array.isArray(foreignKeys) && foreignKeys.length === 0;
+
+      res.json({
+        success: isIntegrityOk && isFkOk,
+        status: isIntegrityOk && isFkOk ? "100%_INTEGRO" : "ADVERTENCIA",
+        integrityDetails: integrity,
+        foreignKeyViolations: foreignKeys.length,
+        checkedAt: new Date().toISOString()
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // REST API: Sales Operation
   app.get("/api/sales", (req, res) => {
     try {
@@ -4656,7 +4958,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       const sale = db.prepare(`
         SELECT s.*, 
                COALESCE(c.name, 'Público General') as client_name,
-               COALESCE(u.username, 'Cajero') as user_name
+               COALESCE(u.username, 'Cajero') as user_name,
+               COALESCE((SELECT SUM(refund_amount) FROM sale_returns sr WHERE sr.sale_id = s.id), 0) as total_refunded
         FROM sales s
         LEFT JOIN clients c ON s.client_id = c.id
         LEFT JOIN users u ON s.user_id = u.id
@@ -4682,12 +4985,47 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         SELECT si.id, si.sale_id, si.product_id, si.quantity, si.price, ${costSelect},
                COALESCE(si.product_name_snapshot, p.name) as product_name, 
                COALESCE(si.product_sku_snapshot, p.sku) as sku, 
-               p.category
+               p.category,
+               COALESCE((SELECT SUM(quantity) FROM sale_returns sr WHERE sr.sale_item_id = si.id), 0) as returned_quantity,
+               MAX(0, si.quantity - COALESCE((SELECT SUM(quantity) FROM sale_returns sr WHERE sr.sale_item_id = si.id), 0)) as available_for_refund
         FROM sale_items si
         LEFT JOIN products p ON p.id = si.product_id
         WHERE si.sale_id = ?
       `).all(id);
       res.json(items);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // FASE 4: Devoluciones dedicadas por venta
+  app.get("/api/sales/:id/returns", (req, res) => {
+    const { id } = req.params;
+    try {
+      const returns = db.prepare(`
+        SELECT sr.*, u.username as registered_by_username
+        FROM sale_returns sr
+        LEFT JOIN users u ON sr.user_id = u.id
+        WHERE sr.sale_id = ?
+        ORDER BY sr.id DESC
+      `).all(id);
+      res.json(returns);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // FASE 4: Listado global de devoluciones auditadas
+  app.get("/api/sale-returns", (req, res) => {
+    try {
+      const returns = db.prepare(`
+        SELECT sr.*, s.created_at as original_sale_date, s.total as original_sale_total
+        FROM sale_returns sr
+        LEFT JOIN sales s ON sr.sale_id = s.id
+        ORDER BY sr.id DESC
+        LIMIT 200
+      `).all();
+      res.json(returns);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -4713,11 +5051,20 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           throw new Error(`El ticket #${sale_id} no fue encontrado.`);
         }
 
+        const auditUser = (req as any).auditUser || {};
+        const normUserId = auditUser.userId || user_id || 1;
+        const normUsername = auditUser.userName || username || 'admin';
+
+        const sId = originalSale.user_id || 1;
+        const sNameRow = db.prepare('SELECT username FROM users WHERE id = ?').get(sId) as any;
+        const sName = sNameRow?.username || 'Cajero';
+
         let totalRefundAmount = 0;
         const reconciledItems: any[] = [];
         const refundedProductIds: any[] = [];
         const refundedSaleItemIds: any[] = [];
         const invLogIds: any[] = [];
+        const returnRecords: any[] = [];
 
         for (const item of item_refunds) {
           // Find matching sale_item row by sale_item_id or product_id
@@ -4726,19 +5073,24 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
             saleItem = db.prepare('SELECT id, product_id, quantity, price, product_name_snapshot, product_sku_snapshot FROM sale_items WHERE id = ? AND sale_id = ?').get(item.sale_item_id, sale_id);
           }
           if (!saleItem && item.product_id) {
-            saleItem = db.prepare('SELECT id, product_id, quantity, price, product_name_snapshot, product_sku_snapshot FROM sale_items WHERE sale_id = ? AND product_id = ? AND quantity > 0').get(sale_id, item.product_id);
+            saleItem = db.prepare('SELECT id, product_id, quantity, price, product_name_snapshot, product_sku_snapshot FROM sale_items WHERE sale_id = ? AND product_id = ?').get(sale_id, item.product_id);
           }
 
-          if (!saleItem || saleItem.quantity <= 0) {
-            console.warn(`[Refund Warning] Skipping item refund for product_id ${item.product_id} / sale_item_id ${item.sale_item_id}: item not found or remaining quantity is 0.`);
+          if (!saleItem) {
+            console.warn(`[Refund Warning] Skipping item refund for product_id ${item.product_id} / sale_item_id ${item.sale_item_id}: item not found.`);
             continue;
           }
 
-          const targetProductId = saleItem.product_id;
-          const cappedQty = Math.min(Math.max(0, Number(item.quantity || 0)), saleItem.quantity);
+          // FASE 4: Consultar cuántas unidades ya se devolvieron previamente sin alterar el comprobante original
+          const alreadyReturnedRow = db.prepare('SELECT COALESCE(SUM(quantity), 0) as returned_qty FROM sale_returns WHERE sale_item_id = ?').get(saleItem.id) as any;
+          const alreadyReturned = alreadyReturnedRow ? Number(alreadyReturnedRow.returned_qty) : 0;
+          const remainingToRefund = Math.max(0, saleItem.quantity - alreadyReturned);
+
+          const cappedQty = Math.min(Math.max(0, Number(item.quantity || 0)), remainingToRefund);
           if (cappedQty <= 0) continue;
 
           // Fetch product details to update master stock
+          const targetProductId = saleItem.product_id;
           let pName = saleItem.product_name_snapshot || 'Producto Desconocido';
           let pSku = saleItem.product_sku_snapshot || '';
           let pCost = 0;
@@ -4760,22 +5112,42 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
           const afterStock = beforeStock + cappedQty;
 
-          // Deduct returned quantity from sale_items
-          db.prepare('UPDATE sale_items SET quantity = quantity - ? WHERE id = ?').run(cappedQty, saleItem.id);
+          // Calculate total refund value based on returned items and unit prices
+          const itemRefundValue = cappedQty * (saleItem.price || 0);
+          totalRefundAmount += itemRefundValue;
+
+          // FASE 4: Registrar en la tabla dedicada `sale_returns` SIN alterar el comprobante original de venta
+          const returnInsert = db.prepare(`
+            INSERT INTO sale_returns (
+              sale_id, sale_item_id, product_id, product_name, product_sku,
+              quantity, refund_amount, unit_price, reason,
+              user_id, username, cashier_id, cashier_username, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            sale_id,
+            saleItem.id,
+            targetProductId,
+            pName,
+            pSku,
+            cappedQty,
+            itemRefundValue,
+            saleItem.price || 0,
+            item.reason || `Devolución de artículo de la venta #${sale_id}`,
+            normUserId,
+            normUsername,
+            sId,
+            sName,
+            nowIso
+          );
+          returnRecords.push(returnInsert.lastInsertRowid);
           refundedSaleItemIds.push(saleItem.id);
 
-          // Atomic Validation Step: Verify post-return inventory state and balance against original order record
+          // Atomic Validation Step: Verify post-return inventory state
           if (targetProductId) {
             const postStockProd = db.prepare('SELECT stock FROM products WHERE id = ?').get(targetProductId) as any;
             const actualStockAfter = postStockProd ? postStockProd.stock : 0;
             if (actualStockAfter !== afterStock) {
               throw new Error(`Inconsistencia atómica en el inventario del producto #${targetProductId}. Esperado: ${afterStock}, Encontrado: ${actualStockAfter}`);
-            }
-
-            const updatedSaleItem = db.prepare('SELECT quantity FROM sale_items WHERE id = ?').get(saleItem.id) as any;
-            const expectedRemaining = saleItem.quantity - cappedQty;
-            if (!updatedSaleItem || updatedSaleItem.quantity !== expectedRemaining) {
-              throw new Error(`Desbalance de inventario en el registro de orden #${sale_id} para el ítem #${saleItem.id}.`);
             }
 
             reconciledItems.push({
@@ -4784,26 +5156,18 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
               before_stock: beforeStock,
               returned_quantity: cappedQty,
               after_stock: actualStockAfter,
-              order_item_remaining: updatedSaleItem.quantity,
+              order_item_remaining: remainingToRefund - cappedQty,
               reconciled: true
             });
           }
 
-          // Calculate total refund value based on returned items and unit prices
-          const itemRefundValue = cappedQty * (saleItem.price || 0);
-          totalRefundAmount += itemRefundValue;
-
           // Log returning item to inventory audit
-          const auditUser = (req as any).auditUser || {};
-          const normUserId = auditUser.userId || user_id || 1;
-          const normUsername = auditUser.userName || username || 'admin';
-
           if (targetProductId) {
             const invRes = db.prepare(`
               INSERT INTO inventory_audit_logs 
               (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
               VALUES (?, ?, ?, 'ingreso_devolucion', ?, ?, ?, ?, ?, ?, ?)
-            `).run(targetProductId, pName, pSku, cappedQty, pCost, normUserId, normUsername, `Devolución #${sale_id}`, 'Reincorporación por devolución física', nowIso);
+            `).run(targetProductId, pName, pSku, cappedQty, pCost, normUserId, normUsername, `Devolución #${sale_id}`, 'Reincorporación por devolución física (Fase 4)', nowIso);
             invLogIds.push(invRes.lastInsertRowid);
 
             // Flag if there's an active inventory physical session that includes this product
@@ -4820,19 +5184,19 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
             eventType: 'ingreso_devolucion',
             category: 'inventario',
             module: 'inventario',
-            action: 'Reincorporación de mercadería por devolución',
+            action: 'Reincorporación de mercadería por devolución auditada',
             severity: 'info',
             entityType: 'producto',
             entityId: targetProductId || sale_id,
             entityName: pName,
-            userId: user_id || 1,
-            userName: username || 'admin',
-            userRole: 'vendedor',
+            userId: normUserId,
+            userName: normUsername,
+            userRole: auditUser.userRole || 'cajero',
             quantityBefore: beforeStock,
             quantityChanged: cappedQty,
             quantityAfter: afterStock,
             priceAfter: pCost,
-            reason: `Devolución de venta #${sale_id}`,
+            reason: `Devolución auditada de venta #${sale_id}`,
             relatedTicket: `Devolución #${sale_id}`,
             relatedProductId: targetProductId,
             relatedSaleId: sale_id,
@@ -4840,15 +5204,11 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           });
         }
 
-        // Update sale total and record cash movement
+        // Record cash movement and update cashier drawer balance
         let refMovId: any = null;
         let refAccId: any = null;
 
         if (totalRefundAmount > 0) {
-          const sId = originalSale.user_id || 1;
-          const sNameRow = db.prepare('SELECT username FROM users WHERE id = ?').get(sId) as any;
-          const sName = sNameRow?.username || 'Cajero';
-
           // Ensure cash account exists
           db.prepare(`
             INSERT OR IGNORE INTO cash_accounts (seller_id, seller_username, current_balance)
@@ -4878,13 +5238,12 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
           const accRow = db.prepare('SELECT id FROM cash_accounts WHERE seller_id = ?').get(sId) as any;
           refAccId = accRow?.id;
-
-          // Update sale total (do NOT delete the sale even if total reaches 0)
-          const newSaleTotal = Math.max(0, originalSale.total - totalRefundAmount);
-          db.prepare('UPDATE sales SET total = ? WHERE id = ?').run(newSaleTotal, sale_id);
+          
+          // NOTA FASE 4: El total original de la venta (`sales.total`) NO se altera ni se sobrescribe,
+          // garantizando inmutabilidad del comprobante de venta original.
         }
 
-        return { refAccId, refMovId, totalRefundAmount, reconciledItems, refundedProductIds, refundedSaleItemIds, invLogIds };
+        return { refAccId, refMovId, totalRefundAmount, reconciledItems, refundedProductIds, refundedSaleItemIds, invLogIds, returnRecords };
       });
 
       const { refAccId, refMovId, totalRefundAmount, reconciledItems, refundedProductIds, refundedSaleItemIds, invLogIds } = refundTrx();
@@ -4978,7 +5337,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
         const saleInsert = db.prepare('INSERT INTO sales (total, discount, payment_method, user_id, client_id, exchange_rate, currency, cierre_id, notes, client_operation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)');
         const itemInsert = db.prepare('INSERT INTO sale_items (sale_id, product_id, quantity, price, cost, product_name_snapshot, product_sku_snapshot, subtotal_minor) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-        const stockUpdate = db.prepare('UPDATE products SET stock = MAX(0, stock - ?), updated_at = ? WHERE id = ?');
+        const stockUpdate = db.prepare('UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ?');
         
         const userRow = db.prepare('SELECT username, role FROM users WHERE id = ?').get(user_id || 1) as any;
         const uName = userRow?.username || 'Cajero';
@@ -5004,10 +5363,10 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
             if (!prodRow) {
               throw new Error(`El producto con ID ${item.product_id} no existe en el inventario.`);
             }
-            if (prodRow.stock <= 0 && !isAdmin) {
+            if (prodRow.stock <= 0) {
               throw new Error(`Venta rechazada: El producto "${prodRow.name}" no tiene stock disponible (Stock: 0).`);
             }
-            if (safeQty > prodRow.stock && !isAdmin) {
+            if (safeQty > prodRow.stock) {
               throw new Error(`Venta rechazada: Stock insuficiente para "${prodRow.name}". Disponible: ${prodRow.stock} unidades, Solicitado: ${safeQty}.`);
             }
 
@@ -5561,6 +5920,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       if (!sale) {
         return res.status(404).json({ error: "El pedido pendiente especificado no existe." });
       }
+      if (sale.status === 'completada' || sale.status === 'finalizada' || sale.status === 'cancelada') {
+        return res.status(400).json({ error: `El pedido pendiente #${id} ya fue ${sale.status} previamente y no puede procesarse nuevamente.` });
+      }
       const items = db.prepare(`SELECT * FROM pending_sale_items WHERE pending_sale_id = ?`).all(id) as any[];
       if (items.length === 0) {
         return res.status(400).json({ error: "El pedido no tiene artículos." });
@@ -5573,7 +5935,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       
       const saleInsert = db.prepare('INSERT INTO sales (total, discount, payment_method, user_id, client_id, exchange_rate, currency, cierre_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)');
       const itemInsert = db.prepare('INSERT INTO sale_items (sale_id, product_id, quantity, price, cost, product_name_snapshot, product_sku_snapshot, subtotal_minor) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-      const stockUpdate = db.prepare('UPDATE products SET stock = MAX(0, stock - ?), updated_at = ? WHERE id = ?');
+      const stockUpdate = db.prepare('UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ?');
       
       let finalSaleId: any = null;
       const itemIds: any[] = [];
@@ -6090,7 +6452,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         (sale_id, product_id, quantity, price, cost, product_name_snapshot, product_sku_snapshot, subtotal_minor) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      const stockUpdate = db.prepare('UPDATE products SET stock = MAX(0, stock - ?), updated_at = ? WHERE id = ?');
+      const stockUpdate = db.prepare('UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ?');
 
       const nowIso = getBoliviaISOString();
       const auditPayloads: any[] = [];
@@ -6654,7 +7016,7 @@ DIRECTIVAS CRÍTICAS:
         try {
           firestoreActive = true;
           // Products from Firestore using Web SDK getDocs and collection
-          const pSnapshot = await getDocs(collection(firestore, 'products'));
+          const pSnapshot = await getDocs(collection(firestore, getCollectionName('products')));
           firestoreProductsCount = pSnapshot.size;
           firestoreProductsStockSum = 0;
           firestoreProductsPriceSum = 0;
@@ -6666,7 +7028,7 @@ DIRECTIVAS CRÍTICAS:
           firestoreProductsPriceSum = Math.round(firestoreProductsPriceSum * 100) / 100;
 
           // Clients from Firestore using Web SDK getDocs and collection
-          const cSnapshot = await getDocs(collection(firestore, 'clients'));
+          const cSnapshot = await getDocs(collection(firestore, getCollectionName('clients')));
           firestoreClientsCount = cSnapshot.size;
           firestoreClientsPointsSum = 0;
           cSnapshot.forEach((doc: any) => {
@@ -7299,7 +7661,7 @@ DIRECTIVAS CRÍTICAS:
               isSystemDaemon: false
             }
           );
-          await setDoc(doc(firestore, 'settings', 'exchange_rate'), validation.enrichedPayload);
+          await setDoc(doc(firestore, getCollectionName('settings'), 'exchange_rate'), validation.enrichedPayload);
         } catch (fsErr: any) {
           console.warn("[ExchangeRate] Firestore setDoc note:", fsErr.message);
         }
@@ -7834,9 +8196,11 @@ DIRECTIVAS CRÍTICAS:
           product_sku: it.live_product_sku || it.product_sku,
           product_category: it.live_category || 'General',
           physical_quantity: it.physical_quantity || 0,
+          counted_stock: it.physical_quantity || 0,
           notes: it.notes || '',
           status: it.status === 'pendiente' ? 'pendiente' : 'contado',
-          recount_requested: it.recount_requested || 0
+          recount_requested: it.recount_requested || 0,
+          had_movements_during_count: it.had_movements_during_count || 0
         }));
 
         const { correct_products, difference_products, ...sanitizedCount } = count;
@@ -7856,7 +8220,11 @@ DIRECTIVAS CRÍTICAS:
           product_category: it.live_category || 'General',
           expected_quantity: liveSysStock,
           live_stock: liveSysStock,
-          difference: diff
+          system_stock: liveSysStock,
+          physical_quantity: physical,
+          counted_stock: physical,
+          difference: diff,
+          had_movements_during_count: it.had_movements_during_count || 0
         };
       });
 
@@ -7869,7 +8237,7 @@ DIRECTIVAS CRÍTICAS:
   // Actualizar la cantidad física de un ítem individual
   app.put("/api/inventory-counts/:id/items/:itemId", (req, res) => {
     const { id, itemId } = req.params;
-    const { physical_quantity, notes, status: bodyStatus } = req.body;
+    const { physical_quantity, counted_stock, notes, status: bodyStatus } = req.body;
     try {
       const count = db.prepare('SELECT status FROM inventory_counts WHERE id = ?').get(id) as any;
       if (!count || count.status === 'cerrado' || count.status === 'cancelado') {
@@ -7887,7 +8255,8 @@ DIRECTIVAS CRÍTICAS:
         return res.status(404).json({ error: "Artículo de conteo no encontrado." });
       }
 
-      const physical = Math.max(0, Number(physical_quantity || 0));
+      const rawPhysical = physical_quantity !== undefined ? physical_quantity : counted_stock;
+      const physical = Math.max(0, Number(rawPhysical || 0));
       const liveExpected = (item.live_stock !== undefined && item.live_stock !== null) ? Number(item.live_stock) : Number(item.expected_quantity || 0);
       const difference = physical - liveExpected;
       
@@ -8007,7 +8376,7 @@ DIRECTIVAS CRÍTICAS:
     const { id } = req.params;
     const { status, notes, auto_apply } = req.body;
     try {
-      const allowed = ['pausado', 'finalizado', 'cancelado', 'en_progreso', 'completado', 'cerrado'];
+      const allowed = ['pausado', 'finalizado', 'cancelado', 'en_progreso', 'completado', 'cerrado', 'aprobado'];
       if (!allowed.includes(status)) {
         return res.status(400).json({ error: "Estado no permitido." });
       }
@@ -8029,7 +8398,10 @@ DIRECTIVAS CRÍTICAS:
               const p = db.prepare('SELECT stock, price_cost, name, sku FROM products WHERE id = ?').get(item.product_id) as any;
               if (p) {
                 const oldStock = p.stock;
-                const newStock = physical;
+                // Conciliación con delta para no perder ventas intermedias ocurridas durante el conteo
+                const snapshot = item.expected_quantity_snapshot ?? item.expected_quantity ?? oldStock;
+                const delta = physical - snapshot;
+                const newStock = Math.max(0, oldStock === snapshot ? physical : oldStock + delta);
 
                 db.prepare('UPDATE products SET stock = ?, updated_at = ? WHERE id = ?').run(newStock, getBoliviaISOString(), item.product_id);
 

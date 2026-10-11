@@ -562,6 +562,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 finalHeaders['Authorization'] = `Bearer ${token}`;
             }
 
+            if (typeof window !== 'undefined' && !finalHeaders['x-app-environment']) {
+                const isSandbox = window.location.hostname.includes('ais-dev') || 
+                                  window.location.hostname === 'localhost' || 
+                                  window.location.hostname === '127.0.0.1';
+                finalHeaders['x-app-environment'] = isSandbox ? 'sandbox' : 'production';
+            }
+
             const response = await fetch(url, { ...options, headers: finalHeaders, signal });
             if (timeoutId) clearTimeout(timeoutId);
             if (!response.ok) {

@@ -221,7 +221,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
         const mapItems = (items: any[]) => items.map(it => {
           const prodObj = products?.find(p => p.id === it.product_id);
-          const physicalQty = it.physical_quantity ?? 0;
+          const physicalQty = it.physical_quantity !== undefined ? it.physical_quantity : (it.counted_stock ?? 0);
           const isChecked = (it.status !== 'pendiente' && it.status !== 'requiere_revision' && !it.recount_requested) ? 1 : 0;
 
           if (isSanitized) {
