@@ -602,6 +602,13 @@ try {
 }
 
 try {
+  db.exec("ALTER TABLE inventory_counts ADD COLUMN created_at DATETIME DEFAULT NULL");
+} catch (e: any) {}
+try {
+  db.exec("UPDATE inventory_counts SET created_at = started_at WHERE created_at IS NULL AND started_at IS NOT NULL");
+} catch (e: any) {}
+
+try {
   db.exec(`
     CREATE TABLE IF NOT EXISTS inventory_count_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

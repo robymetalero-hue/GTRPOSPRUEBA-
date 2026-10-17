@@ -175,12 +175,12 @@ const InventorySearchInput = React.memo(({
                                 }`}
                             >
                                 <div className="min-w-0 flex-1 pr-3">
-                                    <div className="flex items-center gap-2">
-                                        <span className="font-bold text-xs text-slate-800 dark:text-slate-100 truncate">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <span className="font-bold text-xs text-slate-800 dark:text-slate-100 break-words whitespace-normal leading-snug flex-1">
                                             {prod.name}
                                         </span>
                                         {prod.category && (
-                                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-150 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-semibold uppercase shrink-0">
+                                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-150 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-semibold uppercase shrink-0 mt-0.5">
                                                 {prod.category}
                                             </span>
                                         )}

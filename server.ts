@@ -155,7 +155,7 @@ export function getSystemExchangeRate(): number {
 // ============================================================
 export function getActiveInventoryCount() {
   try {
-    return db.prepare("SELECT id, auditor_name, store_name, mode, status, created_at, completed_at, total_products FROM inventory_counts WHERE status IN ('en_progreso', 'pausado', 'completado') ORDER BY id DESC LIMIT 1").get() as any;
+    return db.prepare("SELECT id, auditor_name, store_name, mode, status, started_at, started_at AS created_at, completed_at, total_products FROM inventory_counts WHERE status IN ('en_progreso', 'pausado', 'completado') ORDER BY id DESC LIMIT 1").get() as any;
   } catch (err: any) {
     console.error("[Inventory Lock Check Error]:", err.message);
     return null;
