@@ -898,11 +898,13 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     const itemsWithSysStock = itemsList.filter(it => it.system_stock !== undefined || it.live_stock !== undefined);
     const hasAdminVisibility = itemsWithSysStock.length > 0 && (isAdmin || isReviewMode || !isBlindActive);
 
-    const pendingItems = itemsList.filter(it => 
-      ((it.system_stock ?? it.live_stock ?? 0) > 0 && (it.is_checked === 0 || it.status === 'pendiente')) || 
-      it.status === 'requiere_revision' || 
-      Boolean(it.recount_requested)
-    ).length;
+    const pendingItems = isBlindActive || !hasAdminVisibility
+      ? itemsList.filter(it => (it.is_checked === 0 || it.status === 'pendiente') || it.status === 'requiere_revision' || Boolean(it.recount_requested)).length
+      : itemsList.filter(it => 
+          ((it.system_stock ?? it.live_stock ?? 0) > 0 && (it.is_checked === 0 || it.status === 'pendiente')) || 
+          it.status === 'requiere_revision' || 
+          Boolean(it.recount_requested)
+        ).length;
 
     // Conteo exacto de productos con diferencia física vs teórica (idéntico a la lógica de reviewItems)
     const productsWithDiff = hasAdminVisibility 
@@ -964,13 +966,10 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     return { itemsWithStock: withStock, itemsZeroStock: zeroStock };
   }, [sessionItems]);
 
-  // Selección de la lista a mostrar según el apartado activo (en BLIND se excluyen artículos con stock <= 0)
+  // Selección de la lista a mostrar según el apartado activo (en BLIND se muestran todos los artículos de la sesión)
   const currentSectionItems = useMemo(() => {
-    if (isBlindActive) {
-      // En modo a ciegas, excluir productos con stock 0 para evitar pérdidas de tiempo y confusiones
-      return sessionItems.filter(it => (it.system_stock ?? it.live_stock ?? 0) > 0);
-    }
-    if (!activeSummary.hasAdminVisibility) {
+    if (isBlindActive || !activeSummary.hasAdminVisibility) {
+      // En modo a ciegas o para operadores de kiosco, mostrar todos los artículos asignados a la sesión de conteo
       return sessionItems;
     }
     return stockSection === 'with_stock' ? itemsWithStock : itemsZeroStock;
@@ -2029,18 +2028,22 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                     <button
                       type="button"
                       onClick={handleCompleteSession}
-                      disabled={activeSummary.pendingItems > 0 || isLoading}
+                      disabled={isLoading || activeSummary.checkedItems === 0}
                       className={`flex-1 max-w-sm py-2 px-3 text-xs font-black uppercase rounded-xl transition flex items-center justify-center gap-1.5 shadow-md ${
-                        activeSummary.pendingItems > 0
+                        activeSummary.checkedItems === 0
                           ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed opacity-90'
-                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20 active:scale-98 cursor-pointer'
+                          : activeSummary.pendingItems > 0
+                            ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-600/20 active:scale-98 cursor-pointer'
+                            : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20 active:scale-98 cursor-pointer'
                       }`}
                     >
                       <CheckCircle size={14} className="shrink-0" />
                       <span className="truncate">
-                        {activeSummary.pendingItems > 0
-                          ? `Faltan ${activeSummary.pendingItems} artículos`
-                          : (isAdmin ? 'Finalizar y Conciliar' : 'Concluir y Enviar')}
+                        {activeSummary.checkedItems === 0
+                          ? `Pendiente de Conteo (${activeSummary.totalItems})`
+                          : activeSummary.pendingItems > 0
+                            ? `Concluir (${activeSummary.checkedItems}/${activeSummary.totalItems} contados)`
+                            : (isAdmin ? 'Finalizar y Conciliar' : 'Concluir y Enviar')}
                       </span>
                     </button>
                   </div>
