@@ -56,7 +56,7 @@ interface CountItem {
 }
 
 export default function PhysicalCountManager({ onClose, externalViewMode, embeddedMode = false }: PhysicalCountManagerProps) {
-  const { user, products, fetchProducts, showNotification } = useAppContext();
+  const { user, products, fetchProducts, showNotification, fetchInventoryLockStatus } = useAppContext();
   const isAdmin = user?.role === 'admin' || user?.role === 'propietario' || user?.role === 'administrador' || user?.role === 'dueño' || user?.role === 'jefe';
   const canPreviewQuantities = isAdmin || hasPermission(user, 'preview_quantities_in_count');
 
@@ -101,8 +101,13 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const [segregationWarning, setSegregationWarning] = useState<string | null>(null);
   const [isSessionSanitized, setIsSessionSanitized] = useState<boolean>(false);
 
-  // Modo a ciegas activo de forma estricta (no revela stock al personal/kiosco ni al admin si la sesión es BLIND)
-  const isBlindActive = activeSession?.mode === 'BLIND' || !isAdmin || isSessionSanitized || externalViewMode === 'blind';
+  // Modo a ciegas activo de forma estricta durante el conteo en progreso (en revisión administrativa el admin siempre ve diferencias)
+  const isReviewMode = activeSession?.status === 'completado' || activeSession?.status === 'finalizado';
+  const isBlindActive = !isAdmin 
+    ? true 
+    : isReviewMode 
+      ? false 
+      : (activeSession?.mode === 'BLIND' || externalViewMode === 'blind');
 
   // Filtros del listado de conteo activo
   const [itemSearch, setItemSearch] = useState('');
@@ -537,6 +542,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
             timestamp: new Date().toISOString()
           }
         });
+        fetchInventoryLockStatus?.();
       } else {
         const err = await res.json();
         showNotification?.(`Error al aprobar: ${err.error}`, "error");
@@ -630,6 +636,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
             timestamp: new Date().toISOString()
           }
         });
+        fetchInventoryLockStatus?.();
       }
     } catch (err) {
       console.error(err);

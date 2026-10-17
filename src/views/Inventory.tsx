@@ -1514,10 +1514,14 @@ export default function Inventory() {
                         <AlertTriangle size={18} className="text-amber-500 shrink-0" />
                         <div>
                             <span className="font-black uppercase tracking-wider block">
-                                Control Físico de Inventario Activo (#{inventoryLock.activeCount?.id})
+                                {inventoryLock.activeCount?.status === 'completado'
+                                    ? `Control Físico #${inventoryLock.activeCount?.id} Pendiente de Aprobación`
+                                    : `Control Físico de Inventario Activo (#${inventoryLock.activeCount?.id})`}
                             </span>
                             <span className="text-[11px] opacity-90">
-                                La tienda se encuentra en auditoría ({inventoryLock.activeCount?.store_name || 'Almacén Principal'}). Las entradas de mercadería, importaciones y ajustes de stock están pausados para garantizar la exactitud de los resultados.
+                                {inventoryLock.activeCount?.status === 'completado'
+                                    ? `El auditor (${inventoryLock.activeCount?.auditor_name || 'Personal'}) concluyó el conteo físico (${inventoryLock.activeCount?.store_name || 'Almacén'}). Revisa las variaciones para aprobar y conciliar.`
+                                    : `La tienda se encuentra en auditoría (${inventoryLock.activeCount?.store_name || 'Almacén Principal'}). Las entradas de mercadería, importaciones y ajustes de stock están pausados para garantizar la exactitud de los resultados.`}
                             </span>
                         </div>
                     </div>
@@ -1527,7 +1531,7 @@ export default function Inventory() {
                             onClick={() => setIsPhysicalCountOpen(true)}
                             className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition shrink-0 cursor-pointer shadow-sm"
                         >
-                            Gestionar Control
+                            {inventoryLock.activeCount?.status === 'completado' ? 'Revisar Variaciones y Aprobar' : 'Gestionar Control'}
                         </button>
                         {user?.role === 'admin' && (
                             <button

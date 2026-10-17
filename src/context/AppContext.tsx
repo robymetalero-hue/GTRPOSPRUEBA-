@@ -212,7 +212,7 @@ interface AppContextType {
     applyPwaUpdate: () => Promise<void>;
     handlePwaPrimaryAction: () => Promise<void>;
     showNotification?: (message: string, type?: 'success' | 'error' | 'warn' | 'info') => void;
-    inventoryLock: { isLocked: boolean; activeCount: any | null };
+    inventoryLock: { isLocked: boolean; activeCount: any | null; pendingApproval?: boolean; diffCount?: number };
     fetchInventoryLockStatus: () => Promise<void>;
 }
 
@@ -1262,7 +1262,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 const data = await res.json();
                 setInventoryLock({
                     isLocked: false,
-                    activeCount: data.activeCount || null
+                    activeCount: data.activeCount || null,
+                    pendingApproval: !!data.pendingApproval,
+                    diffCount: data.diffCount || 0
                 });
             }
         } catch (_) {
@@ -1433,7 +1435,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             fetchInventoryLockStatus().catch(() => {});
         };
         window.addEventListener('inventory_operation', handleInvOp);
-        return () => window.removeEventListener('inventory_operation', handleInvOp);
+
+        const lockInterval = setInterval(() => {
+            fetchInventoryLockStatus().catch(() => {});
+        }, 10000);
+
+        return () => {
+            window.removeEventListener('inventory_operation', handleInvOp);
+            clearInterval(lockInterval);
+        };
     }, []);
 
     const fetchClients = async () => {

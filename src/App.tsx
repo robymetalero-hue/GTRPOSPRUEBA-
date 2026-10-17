@@ -23,7 +23,7 @@ import PWAInstallModal from './components/PWAInstallModal';
 import { SupervisorUnlockModal } from './components/SupervisorUnlockModal';
 import { Menu, X, Home, ShoppingCart, Clock, Receipt, PackageSearch, 
     Folder, ClipboardCheck, Undo2, LayoutDashboard, TrendingUp, 
-    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu, Download, RefreshCw, Check, Zap, ShieldCheck, Maximize, Minimize, KeyRound
+    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu, Download, RefreshCw, Check, Zap, ShieldCheck, Maximize, Minimize, KeyRound, AlertTriangle
 } from 'lucide-react';
 
 const lazyWithRetries = (componentImport: () => Promise<any>) =>
@@ -281,7 +281,8 @@ function AppLayout() {
         products, pwaPrompt, installPWA, isPwaInstalled, isInitializing, kioskMode, theme, setTheme, syncError,
         isOfflineModalOpen, setIsOfflineModalOpen, isPwaInstallModalOpen, setIsPwaInstallModalOpen,
         hasPwaUpdate, isUpdatingPwa, pwaUpdateStepMessage, pwaVersionInfo, checkForPwaUpdates, applyPwaUpdate, handlePwaPrimaryAction,
-        isSupervisorUnlocked, setIsSupervisorUnlocked, supervisorInfo, relockKiosk, isFullscreen, toggleFullscreen, showNotification
+        isSupervisorUnlocked, setIsSupervisorUnlocked, supervisorInfo, relockKiosk, isFullscreen, toggleFullscreen, showNotification,
+        inventoryLock
     } = useAppContext();
     
     const isRgb = theme === 'rgb';
@@ -606,6 +607,11 @@ function AppLayout() {
                             {lowStockCount}
                         </span>
                     )}
+                    {targetView === 'conteo_fisico' && inventoryLock?.activeCount?.status === 'completado' && (
+                        <span className="bg-amber-500 text-white font-black text-[9px] px-2 py-0.5 rounded-full animate-pulse tracking-tight shrink-0 shadow-sm relative z-20">
+                            Revisar
+                        </span>
+                    )}
                 </span>
             </motion.button>
         );
@@ -724,7 +730,7 @@ function AppLayout() {
                         {renderNavItem('productos', 'Productos', PackageSearch, 'view_inventory')}
                         {renderNavItem('departamentos', 'Departamentos', Folder, 'view_inventory')}
                         {renderNavItem('inventario', 'Inventario', ClipboardCheck, 'view_inventory')}
-                        
+                        {renderNavItem('conteo_fisico', 'Control Físico', ClipboardCheck, 'view_inventory')}
                         {renderNavItem('devoluciones', 'Devoluciones', Undo2, 'view_inventory')}
                     </div>
 
@@ -1126,7 +1132,7 @@ function AppLayout() {
                                     {renderNavItem('productos', 'Productos', PackageSearch, 'view_inventory')}
                                     {renderNavItem('departamentos', 'Departamentos', Folder, 'view_inventory')}
                                     {renderNavItem('inventario', 'Inventario', ClipboardCheck, 'view_inventory')}
-                                    
+                                    {renderNavItem('conteo_fisico', 'Control Físico', ClipboardCheck, 'view_inventory')}
                                     {renderNavItem('devoluciones', 'Devoluciones', Undo2, 'view_inventory')}
                                 </motion.div>
 
@@ -1324,6 +1330,40 @@ function AppLayout() {
                         </button>
                     </div>
                 </header>)}
+
+                {/* Banner de Notificación Administrativa para Control Físico Pendiente */}
+                {!isKioskLocked && (user?.role === 'admin' || user?.role === 'propietario' || user?.role === 'administrador' || user?.role === 'dueño' || user?.role === 'jefe') && inventoryLock?.activeCount?.status === 'completado' && view !== 'conteo_fisico' && (
+                    <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white px-4 py-2.5 flex items-center justify-between gap-3 shadow-md z-40 shrink-0 border-b border-amber-600/40 animate-in slide-in-from-top-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+                                <AlertTriangle size={18} className="text-white animate-bounce" />
+                            </div>
+                            <div className="truncate">
+                                <p className="text-xs font-black uppercase tracking-wide truncate flex items-center gap-2">
+                                    <span>Control Físico #{inventoryLock.activeCount.id} Pendiente de Aprobación</span>
+                                    {inventoryLock.diffCount !== undefined && inventoryLock.diffCount > 0 && (
+                                        <span className="px-1.5 py-0.2 bg-rose-900/60 text-white text-[9px] font-bold rounded">
+                                            {inventoryLock.diffCount} variación(es)
+                                        </span>
+                                    )}
+                                </p>
+                                <p className="text-[10px] text-amber-100 font-medium truncate">
+                                    El auditor ({inventoryLock.activeCount.auditor_name || 'Personal'}) concluyó el conteo ({inventoryLock.activeCount.store_name || 'Almacén'}). Revisa las variaciones para aprobar y liberar inventario.
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                            <button
+                                type="button"
+                                onClick={() => setView('conteo_fisico')}
+                                className="px-3.5 py-1.5 bg-white text-amber-900 hover:bg-amber-50 rounded-xl text-[11px] font-black uppercase tracking-wider shadow-sm transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                            >
+                                <ClipboardCheck size={14} className="text-amber-700" />
+                                <span>Revisar y Conciliar</span>
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Main page view content display */}
                 <main className={`flex-grow flex-1 relative ${isKioskLocked ? 'pb-16 lg:pb-0' : ''} ${view === 'pos' ? 'overflow-hidden' : 'overflow-hidden'}`}>

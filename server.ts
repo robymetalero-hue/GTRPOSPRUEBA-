@@ -155,7 +155,7 @@ export function getSystemExchangeRate(): number {
 // ============================================================
 export function getActiveInventoryCount() {
   try {
-    return db.prepare("SELECT id, auditor_name, store_name, mode, status FROM inventory_counts WHERE status = 'en_progreso' ORDER BY id DESC LIMIT 1").get() as any;
+    return db.prepare("SELECT id, auditor_name, store_name, mode, status, created_at, completed_at, total_products FROM inventory_counts WHERE status IN ('en_progreso', 'pausado', 'completado') ORDER BY id DESC LIMIT 1").get() as any;
   } catch (err: any) {
     console.error("[Inventory Lock Check Error]:", err.message);
     return null;
@@ -7943,9 +7943,22 @@ DIRECTIVAS CRÍTICAS:
   app.get("/api/inventory-counts/lock-status", (req, res) => {
     try {
       const activeCount = getActiveInventoryCount();
+      let diffCount = 0;
+      if (activeCount && activeCount.status === 'completado') {
+        try {
+          const stats = db.prepare(`
+            SELECT COUNT(*) as diffs 
+            FROM inventory_count_items 
+            WHERE inventory_count_id = ? AND physical_quantity != (expected_quantity_snapshot)
+          `).get(activeCount.id) as any;
+          diffCount = stats ? (stats.diffs || 0) : 0;
+        } catch (_) {}
+      }
       res.json({
         isLocked: false,
-        activeCount: activeCount || null
+        activeCount: activeCount || null,
+        pendingApproval: activeCount?.status === 'completado',
+        diffCount
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
