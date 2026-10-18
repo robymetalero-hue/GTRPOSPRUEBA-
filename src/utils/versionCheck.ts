@@ -112,6 +112,61 @@ export function compareClientWithServerVersion(
 }
 
 /**
+ * Fetches the current application version from the backend or static version manifest.
+ * Guarantees zero-cache headers so the response is never stale.
+ */
+export async function fetchCurrentServerVersion(): Promise<{ version: string; releaseNotes?: string } | null> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        return null;
+    }
+
+    try {
+        const res = await fetch(`/api/app-version?_t=${Date.now()}`, {
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (data?.version) {
+                return {
+                    version: String(data.version),
+                    releaseNotes: data.release_notes || ''
+                };
+            }
+        }
+    } catch (e) {
+        console.warn("[versionCheck] /api/app-version check failed, trying /version.json fallback:", e);
+    }
+
+    // Fallback: Query static version.json
+    try {
+        const staticRes = await fetch(`/version.json?_t=${Date.now()}`, {
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        });
+        if (staticRes.ok) {
+            const staticData = await staticRes.json();
+            if (staticData?.version) {
+                return {
+                    version: String(staticData.version),
+                    releaseNotes: staticData.releaseName || ''
+                };
+            }
+        }
+    } catch (e) {
+        console.warn("[versionCheck] /version.json fallback check failed:", e);
+    }
+
+    return null;
+}
+
+/**
  * Validates the application version upon user login.
  * Compares CLIENT_VERSION with the version payload returned by /api/auth/login.
  * 
@@ -132,16 +187,11 @@ export async function validateVersionOnLogin(
         || loginPayload?.server_version 
         || loginPayload?.version;
 
-    // Fallback: If not present in login payload, query /api/app-version
+    // Fallback: If not present in login payload, query server version helper
     if (!reportedServerVersion && navigator.onLine) {
-        try {
-            const res = await fetch(`/api/app-version?_t=${Date.now()}`);
-            if (res.ok) {
-                const data = await res.json();
-                reportedServerVersion = data?.version;
-            }
-        } catch (e) {
-            console.warn("[validateVersionOnLogin] Fallback version check failed:", e);
+        const fetched = await fetchCurrentServerVersion();
+        if (fetched?.version) {
+            reportedServerVersion = fetched.version;
         }
     }
 

@@ -1,0 +1,6 @@
+{
+  "summary": "Plan de implementación para la actualización de seguridad de Modo Kiosco V2 en GTR POS, protegiendo rutas sensibles, reforzando la autorización por supervisor y garantizando cero regresiones en ventas y datos locales.",
+  "updatedAt": "2026-10-18T04:34:21.085182049Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

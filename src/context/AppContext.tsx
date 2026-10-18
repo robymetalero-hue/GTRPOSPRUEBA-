@@ -114,6 +114,7 @@ interface AppContextType {
     isSupervisorUnlocked: boolean;
     setIsSupervisorUnlocked: (val: boolean) => void;
     supervisorInfo: { id: number; username: string; role: string } | null;
+    setSupervisorInfo: (info: { id: number; username: string; role: string } | null) => void;
     relockKiosk: () => void;
     isFullscreen: boolean;
     toggleFullscreen: () => void;
@@ -286,6 +287,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsSupervisorUnlocked(false);
         setSupervisorInfo(null);
     }, []);
+
+    // Kiosk V2 Security: Auto-relock kiosk after 5 minutes of inactivity when supervisor is unlocked
+    useEffect(() => {
+        if (!isSupervisorUnlocked) return;
+
+        let timeoutId: any;
+        const resetTimer = () => {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+                console.log("[Kiosk Security V2] Supervisor session expired due to inactivity. Relocking kiosk.");
+                relockKiosk();
+            }, 5 * 60 * 1000); // 5 minutes inactivity timeout
+        };
+
+        resetTimer();
+        const activityEvents = ['mousedown', 'keydown', 'touchstart', 'scroll'];
+        const handleActivity = () => resetTimer();
+        activityEvents.forEach(evt => window.addEventListener(evt, handleActivity, { passive: true }));
+
+        return () => {
+            clearTimeout(timeoutId);
+            activityEvents.forEach(evt => window.removeEventListener(evt, handleActivity));
+        };
+    }, [isSupervisorUnlocked, relockKiosk]);
 
     const [isOffline, setIsOffline] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -2092,6 +2117,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             isSupervisorUnlocked,
             setIsSupervisorUnlocked,
             supervisorInfo,
+            setSupervisorInfo,
             relockKiosk,
             isFullscreen,
             toggleFullscreen,

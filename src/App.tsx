@@ -6,7 +6,7 @@ import { hasPermission, isMainAdmin, isAdminUser, canAccessForensicAudit } from 
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { startAutoBackupScheduler } from "./utils/driveBackupScheduler";
 import { hardRefreshApp } from "./utils/appRefresh";
-import { CLIENT_VERSION, compareClientWithServerVersion, validateVersionOnLogin } from "./utils/versionCheck";
+import { CLIENT_VERSION, compareClientWithServerVersion, validateVersionOnLogin, fetchCurrentServerVersion } from "./utils/versionCheck";
 export { CLIENT_VERSION };
 import { 
     initLocalForageCache, 
@@ -281,7 +281,7 @@ function AppLayout() {
         products, pwaPrompt, installPWA, isPwaInstalled, isInitializing, kioskMode, theme, setTheme, syncError,
         isOfflineModalOpen, setIsOfflineModalOpen, isPwaInstallModalOpen, setIsPwaInstallModalOpen,
         hasPwaUpdate, isUpdatingPwa, pwaUpdateStepMessage, pwaVersionInfo, checkForPwaUpdates, applyPwaUpdate, handlePwaPrimaryAction,
-        isSupervisorUnlocked, setIsSupervisorUnlocked, supervisorInfo, relockKiosk, isFullscreen, toggleFullscreen, showNotification,
+        isSupervisorUnlocked, setIsSupervisorUnlocked, supervisorInfo, setSupervisorInfo, relockKiosk, isFullscreen, toggleFullscreen, showNotification,
         inventoryLock
     } = useAppContext();
     
@@ -453,27 +453,56 @@ function AppLayout() {
         return false;
     };
 
+    const shouldTriggerAutoReload = (): boolean => {
+        try {
+            const now = Date.now();
+            const lastReloadStr = localStorage.getItem('last_auto_version_reload');
+            const countStr = localStorage.getItem('auto_version_reload_count');
+            const lastReload = lastReloadStr ? parseInt(lastReloadStr, 10) : 0;
+            const count = countStr ? parseInt(countStr, 10) : 0;
+
+            // If an auto-reload occurred in the last 45 seconds, prevent looping
+            if (lastReload && (now - lastReload) < 45000) {
+                console.warn(`[PWA Update] Auto-recarga en período de enfriamiento (${Math.round((now - lastReload) / 1000)}s atrás). Mostrando panel interactivo.`);
+                return false;
+            }
+
+            // If 2 or more consecutive auto-reloads occurred within 3 minutes, pause auto-reloads to protect user
+            if (lastReload && (now - lastReload) < 180000 && count >= 2) {
+                console.warn("[PWA Update] Múltiples recargas recientes registradas. Requiriendo confirmación manual para evitar bucle.");
+                return false;
+            }
+
+            const newCount = (now - lastReload) < 180000 ? count + 1 : 1;
+            localStorage.setItem('last_auto_version_reload', String(now));
+            localStorage.setItem('auto_version_reload_count', String(newCount));
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
     const checkAppVersion = async () => {
         try {
-            const res = await fetch(`/api/app-version?_t=${Date.now()}`);
-            if (res.ok) {
-                const data = await res.json();
-                const comparison = compareClientWithServerVersion(data.version, CLIENT_VERSION);
+            const serverInfo = await fetchCurrentServerVersion();
+            if (serverInfo && serverInfo.version) {
+                const comparison = compareClientWithServerVersion(serverInfo.version, CLIENT_VERSION);
                 if (comparison.isOutdated) {
                     setUpdateAvailable(true);
                     setServerVersion(comparison.serverVersion);
-                    setReleaseNotes(data.release_notes || "");
+                    setReleaseNotes(serverInfo.releaseNotes || "");
                     setShowUpdateWarning(true);
 
-                    // Phase 6: Safe PWA update without interrupting in-flight cashier transactions
-                    if (isCashierActive()) {
-                        console.log("[PWA Update] Actualización detectada pero aplazada: cajero con venta o carrito activo.");
-                        sessionStorage.setItem('pending_app_reload', 'true');
-                    } else {
-                        console.log("[PWA Update] Aplicando actualización limpia de forma segura...");
-                        sessionStorage.removeItem('pending_app_reload');
-                        await hardRefreshApp();
+                    // Check anti-loop cooldown before automatic refresh
+                    if (shouldTriggerAutoReload()) {
+                        console.log(`[PWA Update] Versión obsoleta detectada (${CLIENT_VERSION} < ${comparison.serverVersion}). Actualizando terminal...`);
+                        await handleForceUpdate();
                     }
+                } else {
+                    // Reset attempt counter when synchronized with server
+                    try {
+                        localStorage.removeItem('auto_version_reload_count');
+                    } catch {}
                 }
             }
         } catch (err) {
@@ -483,7 +512,18 @@ function AppLayout() {
 
     const handleForceUpdate = async () => {
         setIsRefreshing(true);
+        (window as any).__pwaIsHandlingRefresh = true;
         sessionStorage.removeItem('pending_app_reload');
+        if ('serviceWorker' in navigator) {
+            try {
+                const reg = (window as any).__pwaServiceWorkerReg || await navigator.serviceWorker.getRegistration();
+                if (reg?.waiting) {
+                    reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                }
+                navigator.serviceWorker.controller?.postMessage({ type: 'SKIP_WAITING' });
+                navigator.serviceWorker.controller?.postMessage({ type: 'CLEAR_CACHES' });
+            } catch (_) {}
+        }
         await hardRefreshApp();
     };
 
@@ -498,36 +538,45 @@ function AppLayout() {
                     setReleaseNotes(data.release_notes || "");
                     setShowUpdateWarning(true);
 
-                    if (isCashierActive()) {
-                        console.log("[PWA Push] Actualización aplazada: operación activa en curso.");
-                        sessionStorage.setItem('pending_app_reload', 'true');
-                    } else {
-                        sessionStorage.removeItem('pending_app_reload');
-                        await hardRefreshApp();
+                    if (shouldTriggerAutoReload()) {
+                        await handleForceUpdate();
                     }
                 }
             }
         };
         window.addEventListener('app-update-pushed', handlePushUpdate);
 
-        // Phase 7: Check version on natural visibility change (e.g. returning to app on Android)
+        const handlePwaUpdate = async (e: any) => {
+            console.log("[PWA Event] Evento de actualización PWA recibido:", e?.type);
+            const reg = e?.detail?.registration || (window as any).__pwaServiceWorkerReg;
+            if (reg?.waiting) {
+                reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+            }
+            setUpdateAvailable(true);
+            setShowUpdateWarning(true);
+            if (shouldTriggerAutoReload()) {
+                await handleForceUpdate();
+            }
+        };
+        window.addEventListener('pwa-update-available', handlePwaUpdate);
+        window.addEventListener('app-update-available', handlePwaUpdate);
+
+        // Check version on natural visibility change (e.g. returning to app on Android)
         const handleVisibilityChange = () => {
             if (document.visibilityState === 'visible' && navigator.onLine) {
                 checkAppVersion();
-                if (sessionStorage.getItem('pending_app_reload') === 'true' && !isCashierActive()) {
-                    sessionStorage.removeItem('pending_app_reload');
-                    hardRefreshApp();
-                }
             }
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
         
-        // Active version check on mount and every 5 minutes (reduced from aggressive 30s)
+        // Active version check on mount and every 2.5 minutes
         checkAppVersion();
-        const updateInterval = setInterval(checkAppVersion, 300000);
+        const updateInterval = setInterval(checkAppVersion, 150000);
 
         return () => {
             window.removeEventListener('app-update-pushed', handlePushUpdate);
+            window.removeEventListener('pwa-update-available', handlePwaUpdate);
+            window.removeEventListener('app-update-available', handlePwaUpdate);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
             clearInterval(updateInterval);
         };
@@ -1005,15 +1054,20 @@ function AppLayout() {
                             <ShieldCheck size={14} />
                         </button>
                         <button 
+                            type="button"
                             onClick={() => {
-                                const confirmClose = window.confirm("¿Seguro que deseas salir del terminal de caja fiscal?");
-                                if (confirmClose) {
-                                    setView('inicio');
-                                    setUser(null);
+                                if (isKioskLocked) {
+                                    setIsSupervisorModalOpen(true);
+                                } else {
+                                    const confirmClose = window.confirm("¿Seguro que deseas salir del terminal de caja fiscal?");
+                                    if (confirmClose) {
+                                        setView('inicio');
+                                        setUser(null);
+                                    }
                                 }
                             }} 
                             className="w-8 h-8 rounded-xl bg-rose-500/10 hover:bg-rose-500/15 border border-rose-500/15 flex items-center justify-center text-rose-500 cursor-pointer transition hover:scale-105"
-                            title="Salir del Sistema"
+                            title={isKioskLocked ? "Autorización de Supervisor requerida para salir del Kiosco" : "Salir del Sistema"}
                         >
                             <LogOut size={13} />
                         </button>
@@ -1377,24 +1431,24 @@ function AppLayout() {
                             className={`h-full w-full ${view === 'pos' ? 'overflow-hidden' : 'overflow-y-auto'}`}
                         >
                             <React.Suspense fallback={<LoadingViewFallback />}>
-                                {view === 'inicio' && <InicioView />}
+                                {view === 'inicio' && (!isKioskLocked ? <InicioView /> : <POS />)}
                                 {view === 'pos' && <POS />}
-                                {view === 'ventas_pendientes' && hasPermission(user, 'manage_credits') && <CuentasPorCobrarView />}
-                                {view === 'historial_ventas' && hasPermission(user, 'view_sales') && <HistorialVentasView />}
-                                {view === 'cuentas_por_cobrar' && hasPermission(user, 'manage_credits') && <CuentasPorCobrarView />}
-                                {(view === 'productos' || view === 'inventario') && hasPermission(user, 'view_inventory') && <Inventory />}
-                                {view === 'auditoria' && hasPermission(user, 'view_audit') && <AuditoriaView />}
-                                {view === 'departamentos' && hasPermission(user, 'view_inventory') && <DepartamentosView />}
-                                {view === 'devoluciones' && hasPermission(user, 'view_inventory') && <DevolucionesView />}
-                                {view === 'reportes' && hasPermission(user, 'view_reports') && <Dashboard />}
-                                {view === 'analisis' && hasPermission(user, 'view_reports') && <AnalisisView />}
-                                {view === 'usuarios' && user?.role === 'admin' && <PermissionsConsole />}
+                                {view === 'ventas_pendientes' && !isKioskLocked && hasPermission(user, 'manage_credits') && <CuentasPorCobrarView />}
+                                {view === 'historial_ventas' && (hasPermission(user, 'view_sales') || isKioskLocked) && <HistorialVentasView />}
+                                {view === 'cuentas_por_cobrar' && !isKioskLocked && hasPermission(user, 'manage_credits') && <CuentasPorCobrarView />}
+                                {(view === 'productos' || view === 'inventario') && !isKioskLocked && hasPermission(user, 'view_inventory') && <Inventory />}
+                                {view === 'auditoria' && !isKioskLocked && hasPermission(user, 'view_audit') && <AuditoriaView />}
+                                {view === 'departamentos' && !isKioskLocked && hasPermission(user, 'view_inventory') && <DepartamentosView />}
+                                {view === 'devoluciones' && !isKioskLocked && hasPermission(user, 'view_inventory') && <DevolucionesView />}
+                                {view === 'reportes' && !isKioskLocked && hasPermission(user, 'view_reports') && <Dashboard />}
+                                {view === 'analisis' && !isKioskLocked && hasPermission(user, 'view_reports') && <AnalisisView />}
+                                {view === 'usuarios' && !isKioskLocked && user?.role === 'admin' && <PermissionsConsole />}
                                 {view === 'cajas' && hasPermission(user, 'manage_caja') && <CajasView />}
                                 {view === 'conteo_fisico' && <PhysicalCountManager onClose={() => setView('pos')} />}
-                                {view === 'configuraciones' && <ConfiguracionesView />}
-                                {view === 'hardware' && <HardwareConfigView />}
-                                {view === 'diagnostico' && (isAdminUser(user) ? <DiagnosticoView /> : <POS />)}
-                                {view === 'auditoria_forense' && (canAccessForensicAudit(user) ? <AuditoriaForenseView /> : <POS />)}
+                                {view === 'configuraciones' && (!isKioskLocked || isSupervisorUnlocked) && <ConfiguracionesView />}
+                                {view === 'hardware' && (!isKioskLocked || isSupervisorUnlocked) && <HardwareConfigView />}
+                                {view === 'diagnostico' && !isKioskLocked && (isAdminUser(user) ? <DiagnosticoView /> : <POS />)}
+                                {view === 'auditoria_forense' && !isKioskLocked && (canAccessForensicAudit(user) ? <AuditoriaForenseView /> : <POS />)}
                             </React.Suspense>
                         </motion.div>
                     </AnimatePresence>
@@ -1751,6 +1805,7 @@ function AppLayout() {
                 onClose={() => setIsSupervisorModalOpen(false)}
                 onSuccess={(sup) => {
                     setIsSupervisorUnlocked(true);
+                    setSupervisorInfo(sup);
                     if (showNotification) {
                         showNotification(`Terminal desbloqueada por supervisor ${sup.username} (${sup.role}).`, 'success');
                     }

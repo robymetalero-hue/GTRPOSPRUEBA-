@@ -224,6 +224,7 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
 
         // If there is already a waiting worker on load
         if (reg.waiting && navigator.serviceWorker.controller) {
+          reg.waiting.postMessage({ type: 'SKIP_WAITING' });
           window.dispatchEvent(new CustomEvent('pwa-update-available', { detail: { registration: reg } }));
         }
 
@@ -234,6 +235,7 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
             installingWorker.addEventListener('statechange', () => {
               if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
                 console.log('[PWA] Nueva versión detectada y lista para aplicar.');
+                installingWorker.postMessage({ type: 'SKIP_WAITING' });
                 window.dispatchEvent(new CustomEvent('pwa-update-available', { detail: { registration: reg } }));
               }
             });
@@ -248,21 +250,21 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
   // When new Service Worker activates and takes control:
   let hasTriggeredAutoRefresh = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (hasTriggeredAutoRefresh) return;
-
-    // Check if the user currently has active uncompleted items in POS cart
+    if (hasTriggeredAutoRefresh || (window as any).__pwaIsHandlingRefresh) return;
+    hasTriggeredAutoRefresh = true;
+    console.log('[PWA] Nueva versión activada. Recargando terminal de forma inmediata y limpia...');
+    
+    // Prevent duplicate rapid reload if App.tsx already triggered one
     try {
-      const activeCart = localStorage.getItem('active_pos_cart');
-      const items = activeCart ? JSON.parse(activeCart) : [];
-      if (items && Array.isArray(items) && items.length > 0) {
-        console.log('[PWA] Nueva versión activada. Reteniendo recarga automática porque hay productos en el carrito.');
-        window.dispatchEvent(new CustomEvent('pwa-update-available'));
+      const lastReload = localStorage.getItem('last_auto_version_reload');
+      const now = Date.now();
+      if (lastReload && (now - parseInt(lastReload, 10)) < 45000) {
+        console.log('[PWA] Recarga reciente detectada, posponiendo reload automático para evitar bucle.');
         return;
       }
-    } catch (_) {}
-
-    hasTriggeredAutoRefresh = true;
-    console.log('[PWA] Nueva versión activada. Recargando de forma transparente...');
+      localStorage.setItem('last_auto_version_reload', String(now));
+    } catch {}
+    
     window.location.reload();
   });
 }

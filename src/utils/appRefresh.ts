@@ -17,22 +17,39 @@ const CRITICAL_LOCAL_STORAGE_KEYS = [
     'cached_sales_tabs',
     'cached_active_tab_id',
     'gtr_pos_active_cart_backup',
+    'active_pos_cart',
     'kioskMode',
-    'pwa_installed'
+    'pwa_installed',
+    'terminal_id',
+    'active_store_id',
+    'last_auto_version_reload',
+    'auto_version_reload_count'
 ];
 
 export async function hardRefreshApp(): Promise<void> {
     console.warn("[hardRefreshApp] Version mismatch detected. Initiating controlled hard refresh...");
 
-    // 1. Unregister Service Workers
+    // 1. Instruct Service Worker to skip waiting and flush caches immediately (maintaining offline readiness)
     if ('serviceWorker' in navigator) {
         try {
             const registrations = await navigator.serviceWorker.getRegistrations();
             for (const registration of registrations) {
-                await registration.unregister();
+                if (registration.waiting) {
+                    registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+                }
+                if (registration.active) {
+                    registration.active.postMessage({ type: 'CLEAR_CACHES' });
+                    registration.active.postMessage({ type: 'SKIP_WAITING' });
+                }
+                // Check for updates
+                registration.update().catch(() => {});
+            }
+            if (navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHES' });
+                navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
             }
         } catch (swErr) {
-            console.warn("[hardRefreshApp] Error unregistering service workers:", swErr);
+            console.warn("[hardRefreshApp] Warning signaling service workers:", swErr);
         }
     }
 
